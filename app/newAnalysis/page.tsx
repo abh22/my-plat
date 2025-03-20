@@ -34,7 +34,9 @@ export default function NewAnalysisPage() {
   const [loading, setLoading] = useState(false);
 
   const OtherPageContent = dynamic(() => import("@/app/importData/page"), { ssr: false });
-  
+  const SelectedFeaturesPageContent = dynamic(() => import("../selectedFeatures/page"), { ssr: false });
+
+
   // Import data modal state
   const [importModalOpen, setImportModalOpen] = useState(false);
   const [importMethod, setImportMethod] = useState("file");
@@ -53,13 +55,18 @@ export default function NewAnalysisPage() {
     "age", "income", "education", "occupation", "location", "customer_tenure", 
     "purchase_frequency", "last_purchase", "total_spent", "product_category"
   ];
-  
+  const [analysisCompleted, setAnalysisCompleted] = useState(false);
+  const [showModal, setShowModal] = useState(false);
+  // disabling input durin process
+const inputDisabled = loading || analysisCompleted;
+
   const handleStartAnalysis = () => {
     setLoading(true);
     // Simulate analysis startup
     setTimeout(() => {
       setLoading(false);
-      router.push("/");
+      setAnalysisCompleted(true);
+      
     }, 1500);
   };
   
@@ -100,6 +107,18 @@ export default function NewAnalysisPage() {
     }, 1500);
   };
   
+  function handleCancel(): React.MouseEventHandler<HTMLButtonElement> {
+    return () => {
+      if (window.confirm("Are you sure you want to cancel? All progress will be lost.")) {
+        window.location.href = "/newAnalysis";
+      }
+    };
+  }
+function handleBack(): React.MouseEventHandler<HTMLButtonElement> {
+    return () => {      
+      if (window.confirm("Are you sure you want to go back? All progress will be lost.")) {
+        window.location.href = "/dashboard";
+      }};}
   return (
      <SidebarProvider>
           <AppSidebar />
@@ -115,17 +134,17 @@ export default function NewAnalysisPage() {
               <span className="font-medium text-foreground">New Feature Selection</span>
               </div>
               <div className="flex items-center space-x-2">
-                <Link href="/dashboard" passHref><Button variant="outline" size="sm">
+                <Button variant="outline" size="sm" onClick={handleBack()} >
                 <ChevronLeft />
                               Back
-                    </Button></Link>
+                    </Button>
                      </div>
               </header>
               
-            <div className="container mx-auto py-10">
+            <div className="container mx-auto py-10" >
       
-      <p className="text-gray-500 mb-8">
-        Configure a new analysis to identify the most relevant features for your model.
+      <p className="text-gray-500 mb-8 ml-2">
+        Configure a new analysis to identify the most relevant features for your model
       </p>
       
       <div className="grid grid-cols-1 gap-6 md:grid-cols-3">
@@ -142,6 +161,7 @@ export default function NewAnalysisPage() {
                   placeholder="E.g., Customer Churn Feature Selection"
                   value={analysisName}
                   onChange={(e) => setAnalysisName(e.target.value)}
+                  disabled={inputDisabled}
                 />
               </div>
               
@@ -157,6 +177,7 @@ export default function NewAnalysisPage() {
                         setSelectedDatasetName(dataset.name);
                       }
                     }}
+                    disabled={inputDisabled}
                   >
                     <SelectTrigger id="dataset" className="flex-1">
                       <SelectValue placeholder="Choose a dataset" />
@@ -178,7 +199,7 @@ export default function NewAnalysisPage() {
                   
                   <Dialog open={isOpen} onOpenChange={setIsOpen}>
                   <DialogTrigger asChild>
-                      <Button>Import New Data</Button>
+                      <Button disabled={inputDisabled}>Import New Data</Button>
                     </DialogTrigger>
                     <DialogContent className="max-w-2xl h-auto max-h-[85vh]">
                       <DialogHeader>
@@ -188,7 +209,15 @@ export default function NewAnalysisPage() {
                         </DialogDescription>
                       </DialogHeader>
                       
-                      {isOpen && <OtherPageContent />}
+                      {isOpen && <div className="fixed inset-0 flex items-center justify-center bg-black bg-opacity-50 z-50">
+    <div className="bg-white rounded-lg shadow-xl p-6 max-w-2xl w-[90%] max-h-[80vh] overflow-auto">
+      <div className="flex justify-between items-center mb-4">
+        <h2 className="text-xl font-bold">Selected features</h2>
+      </div>
+      <OtherPageContent />
+    </div>
+  </div>
+ }
                     </DialogContent>
                   </Dialog>
                 </div>
@@ -196,14 +225,14 @@ export default function NewAnalysisPage() {
               
               <div className="space-y-2">
                 <Label htmlFor="target">Target Variable</Label>
-                <Select onValueChange={setTargetVariable}>
+                <Select onValueChange={setTargetVariable} >
                   <SelectTrigger id="target">
                     <SelectValue placeholder="Select target variable" />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="churn">churn (boolean)</SelectItem>
-                    <SelectItem value="customer_lifetime_value">customer_lifetime_value (numeric)</SelectItem>
-                    <SelectItem value="category">category (categorical)</SelectItem>
+                    <SelectItem value="churn" disabled={inputDisabled}>churn (boolean)</SelectItem>
+                    <SelectItem value="customer_lifetime_value" disabled={inputDisabled}>customer_lifetime_value (numeric)</SelectItem>
+                    <SelectItem value="category" disabled={inputDisabled}>category (categorical)</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
@@ -225,10 +254,10 @@ export default function NewAnalysisPage() {
                 
                 <Tabs defaultValue="auto" onValueChange={setMethod} className="w-full">
                   <TabsList className="grid grid-cols-4">
-                    <TabsTrigger value="auto">Automatic</TabsTrigger>
-                    <TabsTrigger value="filter">Filter Methods</TabsTrigger>
-                    <TabsTrigger value="wrapper">Wrapper Methods</TabsTrigger>
-                    <TabsTrigger value="embedded">Embedded Methods</TabsTrigger>
+                    <TabsTrigger value="auto" disabled={inputDisabled}>Automatic</TabsTrigger>
+                    <TabsTrigger value="filter" disabled={inputDisabled}>Filter Methods</TabsTrigger>
+                    <TabsTrigger value="wrapper" disabled={inputDisabled}>Wrapper Methods</TabsTrigger>
+                    <TabsTrigger value="embedded" disabled={inputDisabled}>Embedded Methods</TabsTrigger>
                   </TabsList>
                   
                   <TabsContent value="auto" className="pt-4">
@@ -242,15 +271,15 @@ export default function NewAnalysisPage() {
                       </p>
                       <div className="space-y-3">
                         <div className="flex items-center space-x-2">
-                          <Checkbox id="auto-performance" defaultChecked />
+                          <Checkbox id="auto-performance" defaultChecked disabled={inputDisabled} />
                           <Label htmlFor="auto-performance">Optimize for model performance</Label>
                         </div>
                         <div className="flex items-center space-x-2">
-                          <Checkbox id="auto-interpretability" />
+                          <Checkbox id="auto-interpretability" disabled={inputDisabled} />
                           <Label htmlFor="auto-interpretability">Prioritize interpretability</Label>
                         </div>
                         <div className="flex items-center space-x-2">
-                          <Checkbox id="auto-balance" />
+                          <Checkbox id="auto-balance"  disabled={inputDisabled}/>
                           <Label htmlFor="auto-balance">Balance performance and feature count</Label>
                         </div>
                       </div>
@@ -263,17 +292,17 @@ export default function NewAnalysisPage() {
                       <p className="text-sm text-gray-600">
                         Filter methods evaluate features independently of the model.
                       </p>
-                      <RadioGroup defaultValue="correlation">
+                      <RadioGroup defaultValue="correlation" disabled={inputDisabled}>
                         <div className="flex items-center space-x-2">
-                          <RadioGroupItem value="correlation" id="correlation" />
+                          <RadioGroupItem value="correlation" id="correlation" disabled={inputDisabled} />
                           <Label htmlFor="correlation">Correlation Analysis</Label>
                         </div>
                         <div className="flex items-center space-x-2">
-                          <RadioGroupItem value="chi-square" id="chi-square" />
+                          <RadioGroupItem value="chi-square" id="chi-square" disabled={inputDisabled} />
                           <Label htmlFor="chi-square">Chi-Square Test</Label>
                         </div>
                         <div className="flex items-center space-x-2">
-                          <RadioGroupItem value="mutual-info" id="mutual-info" />
+                          <RadioGroupItem value="mutual-info" id="mutual-info" disabled={inputDisabled} />
                           <Label htmlFor="mutual-info">Mutual Information</Label>
                         </div>
                       </RadioGroup>
@@ -295,15 +324,15 @@ export default function NewAnalysisPage() {
                       </p>
                       <RadioGroup defaultValue="forward">
                         <div className="flex items-center space-x-2">
-                          <RadioGroupItem value="forward" id="forward" />
+                          <RadioGroupItem value="forward" id="forward" disabled={inputDisabled} />
                           <Label htmlFor="forward">Forward Selection</Label>
                         </div>
                         <div className="flex items-center space-x-2">
-                          <RadioGroupItem value="backward" id="backward" />
+                          <RadioGroupItem value="backward" id="backward" disabled={inputDisabled}/>
                           <Label htmlFor="backward">Backward Elimination</Label>
                         </div>
                         <div className="flex items-center space-x-2">
-                          <RadioGroupItem value="recursive" id="recursive" />
+                          <RadioGroupItem value="recursive" id="recursive" disabled={inputDisabled} />
                           <Label htmlFor="recursive">Recursive Feature Elimination</Label>
                         </div>
                       </RadioGroup>
@@ -315,9 +344,9 @@ export default function NewAnalysisPage() {
                             <SelectValue placeholder="Select base model" />
                           </SelectTrigger>
                           <SelectContent>
-                            <SelectItem value="random-forest">Random Forest</SelectItem>
-                            <SelectItem value="logistic">Logistic Regression</SelectItem>
-                            <SelectItem value="xgboost">XGBoost</SelectItem>
+                            <SelectItem value="random-forest" disabled={inputDisabled}>Random Forest</SelectItem>
+                            <SelectItem value="logistic" disabled={inputDisabled}>Logistic Regression</SelectItem>
+                            <SelectItem value="xgboost" disabled={inputDisabled}>XGBoost</SelectItem>
                           </SelectContent>
                         </Select>
                       </div>
@@ -331,15 +360,15 @@ export default function NewAnalysisPage() {
                       </p>
                       <RadioGroup defaultValue="lasso">
                         <div className="flex items-center space-x-2">
-                          <RadioGroupItem value="lasso" id="lasso" />
+                          <RadioGroupItem value="lasso" id="lasso" disabled={inputDisabled}/>
                           <Label htmlFor="lasso">Lasso Regression</Label>
                         </div>
                         <div className="flex items-center space-x-2">
-                          <RadioGroupItem value="ridge" id="ridge" />
+                          <RadioGroupItem value="ridge" id="ridge" disabled={inputDisabled}/>
                           <Label htmlFor="ridge">Ridge Regression</Label>
                         </div>
                         <div className="flex items-center space-x-2">
-                          <RadioGroupItem value="elastic-net" id="elastic-net" />
+                          <RadioGroupItem value="elastic-net" id="elastic-net" disabled={inputDisabled} />
                           <Label htmlFor="elastic-net">Elastic Net</Label>
                         </div>
                       </RadioGroup>
@@ -347,7 +376,7 @@ export default function NewAnalysisPage() {
                       <div className="space-y-2">
                         <Label>Regularization Strength</Label>
                         <div className="flex items-center gap-4">
-                          <Slider defaultValue={[0.1]} min={0.01} max={1} step={0.01} className="flex-1" />
+                          <Slider defaultValue={[0.1]} min={0.01} max={1} step={0.01} className="flex-1" disabled={inputDisabled}/>
                           <span className="w-12 text-right">0.1</span>
                         </div>
                       </div>
@@ -366,15 +395,15 @@ export default function NewAnalysisPage() {
             <CardContent>
               <Tabs defaultValue="validation">
                 <TabsList className="w-full">
-                  <TabsTrigger value="validation" className="flex-1">Validation</TabsTrigger>
-                  <TabsTrigger value="preprocessing" className="flex-1">Preprocessing</TabsTrigger>
-                  <TabsTrigger value="computation" className="flex-1">Computation</TabsTrigger>
+                  <TabsTrigger value="validation" className="flex-1" disabled={inputDisabled}>Validation</TabsTrigger>
+                  
+                  <TabsTrigger value="computation" className="flex-1" disabled={inputDisabled}>Computation</TabsTrigger>
                 </TabsList>
                 
-                <TabsContent value="validation" className="pt-4 space-y-4">
+                <TabsContent value="validation" className={`pt-4 space-y-4 ${inputDisabled ? "opacity-50 pointer-events-none" : ""}`}>
                   <div className="space-y-2">
                     <Label>Cross-Validation Strategy</Label>
-                    <Select defaultValue="k-fold">
+                    <Select defaultValue="k-fold"disabled={inputDisabled}>
                       <SelectTrigger>
                         <SelectValue placeholder="Select validation strategy" />
                       </SelectTrigger>
@@ -388,7 +417,7 @@ export default function NewAnalysisPage() {
                   
                   <div className="space-y-2">
                     <Label>Evaluation Metric</Label>
-                    <Select defaultValue="accuracy">
+                    <Select defaultValue="accuracy" disabled={inputDisabled}>
                       <SelectTrigger>
                         <SelectValue placeholder="Select metric" />
                       </SelectTrigger>
@@ -402,32 +431,12 @@ export default function NewAnalysisPage() {
                   </div>
                 </TabsContent>
                 
-                <TabsContent value="preprocessing" className="pt-4 space-y-4">
-                  <div className="flex items-center space-x-2">
-                    <Checkbox id="handle-missing" defaultChecked />
-                    <Label htmlFor="handle-missing">Automatically handle missing values</Label>
-                  </div>
-                  
-                  <div className="flex items-center space-x-2">
-                    <Checkbox id="normalize" defaultChecked />
-                    <Label htmlFor="normalize">Normalize numerical features</Label>
-                  </div>
-                  
-                  <div className="flex items-center space-x-2">
-                    <Checkbox id="encode" defaultChecked />
-                    <Label htmlFor="encode">Encode categorical features</Label>
-                  </div>
-                  
-                  <div className="flex items-center space-x-2">
-                    <Checkbox id="outliers" />
-                    <Label htmlFor="outliers">Remove outliers</Label>
-                  </div>
-                </TabsContent>
+                
                 
                 <TabsContent value="computation" className="pt-4 space-y-4">
                   <div className="space-y-2">
                     <Label>Computation Resources</Label>
-                    <Select defaultValue="medium">
+                    <Select defaultValue="medium" disabled={inputDisabled}>
                       <SelectTrigger>
                         <SelectValue placeholder="Select resource allocation" />
                       </SelectTrigger>
@@ -442,7 +451,7 @@ export default function NewAnalysisPage() {
                   
                   <div className="space-y-2">
                     <Label>Time Limit</Label>
-                    <Select defaultValue="unlimited">
+                    <Select defaultValue="unlimited" disabled={inputDisabled}>
                       <SelectTrigger>
                         <SelectValue placeholder="Select time limit" />
                       </SelectTrigger>
@@ -507,13 +516,21 @@ export default function NewAnalysisPage() {
               </div>
             </CardContent>
             <CardFooter>
+            
               <Button 
                 className="w-full" 
                 disabled={!analysisName || !datasetId || !targetVariable || loading}
-                onClick={handleStartAnalysis}
+                onClick={analysisCompleted ? () => setShowModal(true) : handleStartAnalysis}
               >
-                {loading ? "Starting Analysis..." : "Start Analysis"}
+                {loading ? "Starting Analysis..." : analysisCompleted? "Completed analysis": "Start Analysis"}
               </Button>
+              {showModal && <div className="fixed inset-0 flex items-center justify-center  bg-opacity-20 z-50">
+    <div className="bg-white rounded-lg shadow-[0_4px_15px_rgba(0,0,0,0.5)] p-6 max-w-2xl w-[90%] max-h-[80vh] overflow-hidden">
+      <div className="flex justify-between items-center mb-4">
+        <h2 className="text-xl font-bold">Selected features</h2>
+      </div><div className="overflow-auto max-h-[70vh]"><SelectedFeaturesPageContent /> </div></div></div>}
+             
+              
             </CardFooter>
           </Card>
           
@@ -546,7 +563,7 @@ export default function NewAnalysisPage() {
       </div>
       
       <div className="mt-8 flex justify-end">
-        <Button variant="outline" className="mr-2" onClick={() => router.push("/")}>
+        <Button variant="outline" className="mr-2 border-red-500 text-red-500 hover:bg-red-500 hover:text-white focus:ring-2 focus:ring-red-500" onClick={handleCancel()}>
           Cancel
         </Button>
       </div>

@@ -10,7 +10,7 @@ const UserSchema = new mongoose.Schema({
     type: String, 
     required: true 
   },
-  teams: [{ type: mongoose.Schema.Types.ObjectId, ref: "Team" }]
+  teams: [{ type: mongoose.Schema.Types.ObjectId, ref: "teams" }]
 });
 
 // Prevent mongoose from creating model multiple times

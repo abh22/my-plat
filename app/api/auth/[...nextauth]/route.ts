@@ -1,7 +1,7 @@
 import NextAuth from "next-auth";
 import CredentialsProvider from "next-auth/providers/credentials";
 import { connectToDatabase } from "@/lib/mongodb";
-import User from "@/app/models/user";
+import User from "@/models/user";
 import mongoose from "mongoose";
 
 export const authOptions = {

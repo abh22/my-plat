@@ -1,5 +1,4 @@
 import mongoose from 'mongoose';
-import { type } from 'os';
 const TeamSchema = new mongoose.Schema({
     name: {
         type: String,
@@ -12,4 +11,5 @@ const TeamSchema = new mongoose.Schema({
     },
     members: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }]
 });
-export default mongoose.models.Team || mongoose.model('Team', TeamSchema,'teams');
+console.log(mongoose.models)
+export default mongoose.models?.Team || mongoose.model('Team', TeamSchema, 'teams');
