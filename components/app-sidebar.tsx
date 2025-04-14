@@ -92,26 +92,9 @@ const data = {
     },
     {
       title: "Documentation",
-      url: "#",
+      url: "../../pages/documentation",
       icon: BookOpen,
-      items: [
-        {
-          title: "Introduction",
-          url: "#",
-        },
-        {
-          title: "Get Started",
-          url: "#",
-        },
-        {
-          title: "Tutorials",
-          url: "#",
-        },
-        {
-          title: "Changelog",
-          url: "#",
-        },
-      ],
+      
     },
     {
       title: "Settings",
