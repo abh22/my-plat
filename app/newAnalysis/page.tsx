@@ -8,7 +8,7 @@ export default function NewAnalysis() {
       <div className="flex  min-h-screen">
      
         <AppSidebar />
-        <div className="w-full flex justify-center">
+        <div className="flex-1 flex">
           <WorkflowStepper />
         </div>
       </div>

@@ -399,22 +399,96 @@ export default function DataVisualization({ data, onComplete }: { data: any; onC
 
   // Render bar chart
   const renderBarChart = () => {
-    if (!processedData || !xAxis || !yAxis) return null
+    if (!processedData || !xAxis || !yAxis) return null;
 
-    // Extract data for the selected axes
-    const labels = processedData.data.map((row) => String(row[xAxis]))
-    const values = processedData.data.map((row) => Number(row[yAxis]) || 0)
+    // Determine if the axes are numeric or categorical
+    const isXAxisNumeric = processedData.data.every((row) => typeof row[xAxis] === "number");
+    const isYAxisNumeric = processedData.data.every((row) => typeof row[yAxis] === "number");
 
-    const chartData = {
-      labels,
+    let chartData: { labels: string[]; values: number[] };
+
+    if (isXAxisNumeric && isYAxisNumeric) {
+      // Numeric vs Numeric
+      chartData = {
+        labels: processedData.data.map((row) => String(row[xAxis])),
+        values: processedData.data.map((row) => Number(row[yAxis]) || 0),
+      };
+    } else if (!isXAxisNumeric && isYAxisNumeric) {
+      // Categorical vs Numeric
+      const groupedData: Record<string, number> = {};
+      processedData.data.forEach((row) => {
+        const category = String(row[xAxis]);
+        const value = Number(row[yAxis]) || 0;
+
+        if (groupedData[category]) {
+          groupedData[category] += value;
+        } else {
+          groupedData[category] = value;
+        }
+      });
+
+      chartData = {
+        labels: Object.keys(groupedData),
+        values: Object.values(groupedData),
+      };
+    } else if (isXAxisNumeric && !isYAxisNumeric) {
+      // Numeric vs Categorical
+      const groupedData: Record<string, number> = {};
+      processedData.data.forEach((row) => {
+        const category = String(row[yAxis]);
+        const value = Number(row[xAxis]) || 0;
+
+        if (groupedData[category]) {
+          groupedData[category] += value;
+        } else {
+          groupedData[category] = value;
+        }
+      });
+
+      chartData = {
+        labels: Object.keys(groupedData),
+        values: Object.values(groupedData),
+      };
+    } else {
+      // Categorical vs Categorical
+      const groupedData: Record<string, Record<string, number>> = {};
+      processedData.data.forEach((row) => {
+        const xCategory = String(row[xAxis]);
+        const yCategory = String(row[yAxis]);
+
+        if (!groupedData[xCategory]) {
+          groupedData[xCategory] = {};
+        }
+
+        if (groupedData[xCategory][yCategory]) {
+          groupedData[xCategory][yCategory] += 1; // Count occurrences
+        } else {
+          groupedData[xCategory][yCategory] = 1;
+        }
+      });
+
+      const labels = Object.keys(groupedData);
+      const values = labels.map((xCategory) =>
+        Object.values(groupedData[xCategory]).reduce((sum, count) => sum + count, 0)
+      );
+
+      chartData = { labels, values };
+    }
+
+    // Debugging logs
+    console.log("Bar Chart Labels:", chartData.labels);
+    console.log("Bar Chart Values:", chartData.values);
+
+    const data = {
+      labels: chartData.labels,
       datasets: [
         {
-          label: yAxis,
-          data: values,
+          label: `${xAxis} vs ${yAxis}`,
+          data: chartData.values,
           backgroundColor: "rgba(53, 162, 235, 0.5)",
         },
       ],
-    }
+    };
 
     const options = {
       responsive: true,
@@ -428,10 +502,10 @@ export default function DataVisualization({ data, onComplete }: { data: any; onC
           text: `${xAxis} vs ${yAxis}`,
         },
       },
-    }
+    };
 
-    return <Bar data={chartData} options={options} />
-  }
+    return <Bar data={data} options={options} />;
+  };
 
   // Render line chart
   const renderLineChart = () => {
@@ -598,32 +672,32 @@ export default function DataVisualization({ data, onComplete }: { data: any; onC
         </Alert>
       )}
 
-      <div className="grid gap-6 md:grid-cols-2">
+      <div className="grid gap-6 md:grid-cols-2 ">
         <Card>
           <CardContent className="pt-6">
             <h3 className="text-sm font-medium mb-4">Visualization Type</h3>
             <Tabs defaultValue="table" value={selectedChart} onValueChange={setSelectedChart}>
-              <TabsList className="grid w-full grid-cols-4">
-                <TabsTrigger value="table" className="flex flex-col items-center py-4">
+              <TabsList className="grid w-full grid-cols-4 gap-2 px-2">
+                <TabsTrigger value="table" className="flex flex-col items-center py-2 px-2 flex-grow">
                   <Table2 className="h-5 w-5 mb-1" />
                   <span className="text-xs">Table</span>
                 </TabsTrigger>
-                <TabsTrigger value="bar" className="flex flex-col items-center py-4">
+                <TabsTrigger value="bar" className="flex flex-col items-center py-4 px-2 flex-grow">
                   <BarChart3 className="h-5 w-5 mb-1" />
                   <span className="text-xs">Bar</span>
                 </TabsTrigger>
-                <TabsTrigger value="line" className="flex flex-col items-center py-4">
+                <TabsTrigger value="line" className="flex flex-col items-center py-4 px-2 flex-grow">
                   <LineChart className="h-5 w-5 mb-1" />
                   <span className="text-xs">Line</span>
                 </TabsTrigger>
-                <TabsTrigger value="pie" className="flex flex-col items-center py-4">
+                <TabsTrigger value="pie" className="flex flex-col items-center py-4 px-2 flex-grow">
                   <PieChart className="h-5 w-5 mb-1" />
                   <span className="text-xs">Pie</span>
                 </TabsTrigger>
               </TabsList>
             </Tabs>
 
-            {processedData && (
+            {processedData && selectedChart!=="table" && (
               <div className="mt-6 space-y-4">
                 <div className="grid w-full items-center gap-1.5">
                   <Label htmlFor="x-axis">{selectedChart === "pie" ? "Category" : "X-Axis"}</Label>

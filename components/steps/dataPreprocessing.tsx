@@ -25,6 +25,7 @@ export default function DataPreprocessing({ data, onComplete }: { data: any; onC
   const dataSummary = visualizationData.dataSummary || {}
   const columns = dataSummary.columns || []
   const [selectedColumns, setSelectedColumns] = useState<string[]>([])
+  const [processedData, setProcessedData] = useState<any>(null)
 
   useEffect(() => {
     if (columns && columns.length > 0) {
@@ -61,9 +62,15 @@ export default function DataPreprocessing({ data, onComplete }: { data: any; onC
     const formData = new FormData()
     formData.append("config", JSON.stringify(config))
     const fileObject = data.data_import?.fileObjects?.[0] || data.file
-    if (fileObject) {
-      formData.append("file", fileObject)
-    }
+    if (!fileObject) {
+    console.error("No file object found");
+    setResultMessage("No file found to process");
+    setMessageType("error");
+    setIsLoading(false);
+    return;
+  }
+  
+  formData.append("file", fileObject);
     
     try {
       const res = await fetch("http://localhost:8000/preprocess", {
@@ -79,11 +86,9 @@ export default function DataPreprocessing({ data, onComplete }: { data: any; onC
         console.log("Message:", result.message)
         setResultMessage(result.message)
         setMessageType("success")
+        setProcessedData(result.processedData)
         
-        // If onComplete is provided, call it with the result
-        if (onComplete && result.processedData) {
-          onComplete(result.processedData)
-        }
+    
       }
     } catch (err) {
       console.error("Error in preprocessing", err)
@@ -93,7 +98,20 @@ export default function DataPreprocessing({ data, onComplete }: { data: any; onC
       setIsLoading(false)
     }
   }
-  
+
+  const handleSubmit = () => {
+    if (processedData) {
+      // Pass the processed data to the onComplete callback
+      onComplete(processedData);
+      console.log("fetures_names:", processedData.featureNameMapping)
+      
+    } else {
+      console.error("No processed data available to proceed.");
+      setResultMessage("Please run preprocessing before continuing.");
+      setMessageType("error");
+    }
+  };
+
   // Render the appropriate alert based on message type
   const renderAlert = () => {
     if (!resultMessage) return null
@@ -119,7 +137,7 @@ export default function DataPreprocessing({ data, onComplete }: { data: any; onC
     }
     return null
   }
-
+ 
   return (
     <div className="space-y-6">
       <p className="text-muted-foreground">Clean and transform your data to prepare it for analysis and modeling.</p>
@@ -185,12 +203,17 @@ export default function DataPreprocessing({ data, onComplete }: { data: any; onC
         </Card>
       </div>
 
-      <div className="flex justify-end">
+      <div className="flex justify-end gap-2">
         <Button 
           onClick={handleRun} 
           disabled={selectedOperations.length === 0 || selectedColumns.length === 0 || isLoading}
         >
           {isLoading ? "Processing..." : "Run"}
+        </Button>
+        <Button onClick={handleSubmit} disabled={
+          isLoading 
+        }>
+          Continue
         </Button>
       </div>
     </div>

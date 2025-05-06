@@ -100,7 +100,7 @@ export default function WorkflowStepper() {
   }
 
   return (
-    <div className="w-full max-w-5xl ml-4">
+    <div className="w-full overflow-x-hidden max-w-5xl ml-4">
       {/* Stepper navigation */}
       <nav aria-label="Progress" className="mb-8 mt-8">
         <ol role="list" className="flex flex-row items-center justify-start flex-nowrap space-x-2">
@@ -137,7 +137,7 @@ export default function WorkflowStepper() {
               {index !== steps.length - 1 && (
                 <div
                   className={cn(
-                    "absolute top-4 left-0 hidden w-full sm:block",
+                 
                     index < steps.length - 1 ? "left-4 sm:left-1/2" : "",
                   )}
                 >
@@ -171,7 +171,7 @@ export default function WorkflowStepper() {
       </div>
 
       {/* Navigation buttons */}
-      <div className="flex justify-between mt-6">
+      <div className="flex justify-between mt-6 mb-2">
         <Button
           variant="outline"
           onClick={() => currentStep > 0 && setCurrentStep(currentStep - 1)}
