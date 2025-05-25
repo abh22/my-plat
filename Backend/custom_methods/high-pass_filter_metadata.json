@@ -1,0 +1,7 @@
+{
+  "name": "High-pass filter",
+  "filename": "high-pass_filter.py",
+  "description": "Multiple Filter Types: Supports Butterworth (default), Chebyshev Type I & II, and Elliptic high-pass filters",
+  "category": "preprocessing",
+  "created": "2025-05-24T18:30:00.000Z"
+}

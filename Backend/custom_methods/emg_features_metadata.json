@@ -1,0 +1,7 @@
+{
+  "name": "EMG Full-Matrix Feature Extractor",
+  "filename": "emg_features.py",
+  "category": "feature-extraction",
+  "function": "extract_all_features_full",
+  "parameters": {}
+}

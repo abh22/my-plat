@@ -1,0 +1,7 @@
+{
+  "name": "Dominant frequency",
+  "filename": "dominant_frequency.py",
+  "description": "The dominant frequency gives insight into how quickly a signal is changing over time",
+  "category": "feature-extraction",
+  "created": "2025-05-21 16:15:20.682037"
+}

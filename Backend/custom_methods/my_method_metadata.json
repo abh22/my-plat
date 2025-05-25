@@ -1,0 +1,6 @@
+{  "name": "Z-Score Normalizer",
+  "filename": "my_method.py",
+  "description": "Performs z-score normalization on numeric columns",
+  "category": "preprocessing",
+  "created": "2025-05-20 09:54:33.663016"
+}

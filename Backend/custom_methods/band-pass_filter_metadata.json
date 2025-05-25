@@ -1,0 +1,7 @@
+{
+  "name": "Band-pass filter",
+  "filename": "band-pass_filter.py",
+  "description": "Multiple Filter Types: Supports Butterworth, Chebyshev Type I & II, and Elliptic band-pass filters",
+  "category": "preprocessing",
+  "created": "2025-05-24T18:45:00.000Z"
+}

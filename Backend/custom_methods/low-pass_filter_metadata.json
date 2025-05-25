@@ -1,0 +1,7 @@
+{
+  "name": "Low-pass filter",
+  "filename": "low-pass_filter.py",
+  "description": "Multiple Filter Types: Supports Butterworth (default), Chebyshev Type I & II, and Elliptic filters",
+  "category": "preprocessing",
+  "created": "2025-05-24 18:00:49.812535"
+}

@@ -21,6 +21,7 @@ const steps = [
   { id: 4, name: "Feature Evaluation", component: FeatureEvaluation },
   { id: 5, name: "Classification", component: Classification },
   { id: 6, name: "Testing", component: Testing },
+
 ]
 
 export default function WorkflowStepper() {
@@ -98,11 +99,11 @@ export default function WorkflowStepper() {
       setCurrentStep(stepIndex)
     }
   }
-
   return (
-    <div className="w-full overflow-x-hidden max-w-5xl ml-4">
-      {/* Stepper navigation */}
-      <nav aria-label="Progress" className="mb-8 mt-8">
+    <div className="w-full overflow-x-hidden px-4 sm:px-8 md:px-16">
+  {/* Stepper navigation */}
+  <nav aria-label="Progress" className="mb-8 mt-8">
+
         <ol role="list" className="flex flex-row items-center justify-start flex-nowrap space-x-2">
           {steps.map((step, index) => (
             <li key={step.id} className="flex items-center">
@@ -155,10 +156,8 @@ export default function WorkflowStepper() {
             </li>
           ))}
         </ol>
-      </nav>
-
-      {/* Current step content */}
-      <div className="bg-card border rounded-lg p-6 mb-6">
+      </nav>      {/* Current step content */}
+      <div className="bg-card border rounded-lg p-4 sm:p-5 md:p-6 mb-6 w-full">
         <h2 className="text-xl font-semibold mb-4">{steps[currentStep].name}</h2>
         {/* Use JSX element syntax instead of component variable */}
         {currentStep === 0 && <DataImport data={workflowData} onComplete={handleNext} />}

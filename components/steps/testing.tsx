@@ -1,114 +1,203 @@
 "use client"
 
-import { useState } from "react"
-import { Upload, FileUp } from "lucide-react"
-import { Button } from "@/components/ui/button"
+import { useState, useEffect } from "react"
 import { Card, CardContent } from "@/components/ui/card"
-import { Input } from "@/components/ui/input"
+import { Button } from "@/components/ui/button"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Label } from "@/components/ui/label"
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { Input } from "@/components/ui/input"
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
+import { AlertCircle, CheckCircle } from "lucide-react"
 
-export default function DataImport({ data, onComplete }: { data: any; onComplete: (data: any) => void }) {
-  const [files, setFiles] = useState<File[]>([])
-  const [url, setUrl] = useState("")
-  const [activeTab, setActiveTab] = useState("upload")
+export default function Testing({ data, onComplete }: { data: any; onComplete: (data: any) => void }) {
+  const [selectedModel, setSelectedModel] = useState<string>("")
+  const [testResults, setTestResults] = useState<any>(null)
+  const [isLoading, setIsLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [testSplitRatio, setTestSplitRatio] = useState("0.2")
+  
+  // Get classification data from previous step
+  const classificationData = data?.classification || {}
+  const models = classificationData?.trainedModels || []
+  
+  useEffect(() => {
+    // Set the first model as selected if available
+    if (models && models.length > 0 && !selectedModel) {
+      setSelectedModel(models[0].name || models[0].id || "")
+    }
+  }, [models, selectedModel])
 
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files && e.target.files.length > 0) {
-      console.log("Files selected:", e.target.files.length)
-      setFiles(Array.from(e.target.files))
+  const handleTest = async () => {
+    setIsLoading(true)
+    setError(null)
+    
+    try {
+      // Prepare test data
+      const testData = {
+        modelName: selectedModel,
+        testSplitRatio: parseFloat(testSplitRatio),
+        // Include any processed data from the preprocessing step
+        processedData: data?.preprocessing?.processedData || [],
+        // Include feature mapping if available
+        featureNameMapping: data?.preprocessing?.featureNameMapping || {}
+      }
+      
+      // Call the test endpoint
+      const response = await fetch("http://localhost:8000/test-model", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(testData),
+      })
+      
+      if (!response.ok) {
+        throw new Error(`Test failed: ${response.statusText}`)
+      }
+      
+      const results = await response.json()
+      setTestResults(results)
+    } catch (err: any) {
+      setError(err.message || "Testing failed")
+      console.error("Error testing model:", err)
+    } finally {
+      setIsLoading(false)
     }
   }
 
-  const handleSubmit = () => {
-    const importData = {
-      method: activeTab,
-      files: files.map((f) => f.name),
-      fileObjects: files, // storing file
-      url: url,
-    }
-    console.log("Submitting import data:", importData)
-    console.log("File objects included:", files.length)
-    onComplete(importData)
+  const handleComplete = () => {
+    onComplete({
+      testResults,
+      selectedModel,
+      testSplitRatio: parseFloat(testSplitRatio)
+    })
   }
 
   return (
     <div className="space-y-6">
-      {/* <p className="text-muted-foreground">
-        Import your dataset by uploading files or providing a URL to your data source.
+      <p className="text-muted-foreground mb-4">
+        Test your trained model with a portion of your data to evaluate performance.
       </p>
-
-      <Tabs defaultValue="upload" value={activeTab} onValueChange={setActiveTab}>
-        <TabsList className="grid w-full grid-cols-">
-          <TabsTrigger value="upload">Upload Files</TabsTrigger>
-          <TabsTrigger value="url">From URL</TabsTrigger>
-        </TabsList>
-
-        <TabsContent value="upload" className="space-y-4"> */}
+      
+      {error && (
+        <Alert variant="destructive">
+          <AlertCircle className="h-4 w-4" />
+          <AlertTitle>Error</AlertTitle>
+          <AlertDescription>{error}</AlertDescription>
+        </Alert>
+      )}
+      
+      <div className="grid gap-6 md:grid-cols-2">
+        <Card>
+          <CardContent className="pt-6">
+            <h3 className="text-sm font-medium mb-4">Test Configuration</h3>
+            
+            <div className="space-y-4">
+              <div>
+                <Label htmlFor="model-select">Select Model</Label>
+                <Select
+                  value={selectedModel}
+                  onValueChange={setSelectedModel}
+                >
+                  <SelectTrigger className="w-full">
+                    <SelectValue placeholder="Select a trained model" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {models.length > 0 ? (
+                      models.map((model: any, index: number) => (
+                        <SelectItem key={index} value={model.name || model.id || `model-${index}`}>
+                          {model.name || model.id || `Model ${index + 1}`}
+                        </SelectItem>
+                      ))
+                    ) : (
+                      <SelectItem value="none" disabled>
+                        No models available
+                      </SelectItem>
+                    )}
+                  </SelectContent>
+                </Select>
+              </div>
+              
+              <div>
+                <Label htmlFor="test-split">Test Split Ratio</Label>
+                <Input
+                  id="test-split"
+                  type="number"
+                  min="0.1"
+                  max="0.5"
+                  step="0.05"
+                  value={testSplitRatio}
+                  onChange={(e) => setTestSplitRatio(e.target.value)}
+                  className="w-full"
+                />
+                <p className="text-xs text-muted-foreground mt-1">
+                  The proportion of data to use for testing (e.g., 0.2 = 20%)
+                </p>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+        
+        {testResults && (
           <Card>
             <CardContent className="pt-6">
-              <div className="flex flex-col items-center justify-center border-2 border-dashed border-muted-foreground/25 rounded-lg p-12 text-center">
-                <Upload className="h-10 w-10 text-muted-foreground mb-4" />
-                <p className="mb-2 text-sm text-muted-foreground">
-                  <span className="font-semibold">Click to upload</span> or drag and drop
-                </p>
-                <p className="text-xs text-muted-foreground">CSV, Excel, JSON (up to 10MB)</p>
-                <div className="relative"><Input
-                  id="file-upload"
-                  type="file"
-                  className="absolute inset-0 opacity-0 w-full cursor-pointer"
-                  onChange={handleFileChange}
-                  multiple
-                  accept=".csv,.xlsx,.json"
-                />
-               
-                  <Button  variant="outline" className="gap-2">
-                    <FileUp className="h-4 w-4" />
-                    Select Files
-                  </Button>
+              <h3 className="text-sm font-medium mb-4">Test Results</h3>
+              
+              <div className="space-y-3">
+                {testResults.accuracy && (
+                  <div>
+                    <Label className="text-xs text-muted-foreground">Accuracy</Label>
+                    <p className="text-lg font-medium">{(testResults.accuracy * 100).toFixed(2)}%</p>
                   </div>
+                )}
+                
+                {testResults.precision && (
+                  <div>
+                    <Label className="text-xs text-muted-foreground">Precision</Label>
+                    <p className="text-lg font-medium">{(testResults.precision * 100).toFixed(2)}%</p>
+                  </div>
+                )}
+                
+                {testResults.recall && (
+                  <div>
+                    <Label className="text-xs text-muted-foreground">Recall</Label>
+                    <p className="text-lg font-medium">{(testResults.recall * 100).toFixed(2)}%</p>
+                  </div>
+                )}
+                
+                {testResults.f1 && (
+                  <div>
+                    <Label className="text-xs text-muted-foreground">F1 Score</Label>
+                    <p className="text-lg font-medium">{(testResults.f1 * 100).toFixed(2)}%</p>
+                  </div>
+                )}
               </div>
-
-              {files.length > 0 && (
+              
+              {testResults.confusionMatrix && (
                 <div className="mt-4">
-                  <h3 className="text-sm font-medium mb-2">Selected files:</h3>
-                  <ul className="text-sm text-muted-foreground space-y-1">
-                    {files.map((file, index) => (
-                      <li key={index} className="flex items-center">
-                        <span>{file.name}</span>
-                        <span className="ml-2 text-xs">({(file.size / 1024).toFixed(1)} KB)</span>
-                      </li>
-                    ))}
-                  </ul>
+                  <Label className="text-xs text-muted-foreground mb-2">Confusion Matrix</Label>
+                  <div className="bg-muted p-2 rounded text-xs overflow-x-auto">
+                    <pre>{JSON.stringify(testResults.confusionMatrix, null, 2)}</pre>
+                  </div>
                 </div>
               )}
             </CardContent>
           </Card>
-        
-
-        {/* <TabsContent value="url">
-          <Card>
-            <CardContent className="pt-6 space-y-4">
-              <div className="grid w-full items-center gap-1.5">
-                <Label htmlFor="url">Data Source URL</Label>
-                <Input
-                  id="url"
-                  type="url"
-                  placeholder="https://example.com/data.csv"
-                  value={url}
-                  onChange={(e) => setUrl(e.target.value)}
-                />
-                <p className="text-xs text-muted-foreground">Enter the URL of your CSV, Excel, or JSON data source</p>
-              </div>
-            </CardContent>
-          </Card>
-        </TabsContent>
-      </Tabs> */}
-
-      <div className="flex justify-end">
+        )}
+      </div>
+      
+      <div className="flex justify-end space-x-4">
         <Button
-          onClick={handleSubmit}
-          disabled={(activeTab === "upload" && files.length === 0) || (activeTab === "url" && !url)}
+          onClick={handleTest}
+          disabled={!selectedModel || isLoading || models.length === 0}
+        >
+          {isLoading ? "Testing..." : "Run Test"}
+        </Button>
+        
+        <Button
+          variant="default"
+          onClick={handleComplete}
+          disabled={!testResults || isLoading}
         >
           Continue
         </Button>
@@ -116,4 +205,3 @@ export default function DataImport({ data, onComplete }: { data: any; onComplete
     </div>
   )
 }
-

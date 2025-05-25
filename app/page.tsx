@@ -98,10 +98,10 @@ export default function Page() {
   return (
     <SidebarProvider>
       <AppSidebar />
-      <SidebarInset>
-        <div className="flex flex-col min-h-screen">
-          <header className="flex items-center justify-between px-6 py-4 border-b">
-          <div className="flex items-center gap-2 px-4">
+      <SidebarInset className="flex-1">
+        <div className="flex flex-col min-h-screen w-full">
+          <header className="flex items-center justify-between px-4 sm:px-6 py-4 border-b">
+          <div className="flex items-center gap-2">
           <SidebarTrigger className="-ml-1" />
           <Separator
             orientation="vertical"

@@ -21,6 +21,52 @@ export default function FeatureExtraction({ data, onComplete }: { data: any; onC
   const [processedData, setProcessedData] = useState<any>(null);
   const [targetColumn, setTargetColumn] = useState<string>("");
   const [activeTab, setActiveTab] = useState("automatic");
+  const [extractedFeatures, setExtractedFeatures] = useState<any[]>([]);
+  const [featureNameMapping, setFeatureNameMapping] = useState<any>(data.featureNameMapping || {});
+  // New state for custom methods
+  const [customMethods, setCustomMethods] = useState<Array<{ name: string; filename: string; description: string; category: string }>>([]);
+
+  // Fetch custom methods from the backend
+  useEffect(() => {
+    const fetchCustomMethods = async () => {
+      try {
+        console.log("Fetching custom feature extraction methods...");
+        const response = await fetch("http://localhost:8000/list-methods");
+        console.log('list-methods fetched status:', response.status);
+        if (!response.ok) {
+          console.error("Failed to fetch custom methods:", response.statusText);
+          return;
+        }
+        const data = await response.json();
+        console.log('Custom methods:', data.methods);
+        if (data.methods) {
+          // Filter methods by category (feature extraction)
+          const extractionMethods = data.methods.filter(
+            (method: any) => method.category === "feature-extraction" || 
+                            method.category === "extraction" ||
+                            method.category === ""
+          );
+          setCustomMethods(extractionMethods);
+          console.log("Fetched custom extraction methods:", extractionMethods);
+        } else {
+          console.log("No methods found in response:", data);
+        }
+      } catch (error) {
+        console.error("Error fetching custom methods:", error);
+      }
+    };
+
+    fetchCustomMethods();
+  }, []);
+
+  // Access featureNameMapping from the previous component
+  const targetColumnOptions = Object.keys(featureNameMapping);
+
+  useEffect(() => {
+    if (targetColumnOptions.length > 0) {
+      setTargetColumn(targetColumnOptions[0]); // Set the first option as default
+    }
+  }, [targetColumnOptions]);
 
   // Use preprocessed data directly from the previous step
   const columns = data?.columns || []; // Assuming `data` contains preprocessed columns
@@ -54,7 +100,8 @@ export default function FeatureExtraction({ data, onComplete }: { data: any; onC
     setMessageType(null);
     setIsLoading(true);
   
-    const config = {
+    const config: any = {
+      // methods may be simple filenames or 'filename:function'; backend should parse
       methods: selectedMethods,
       features: selectedFeatures,
       settings: {
@@ -110,7 +157,9 @@ export default function FeatureExtraction({ data, onComplete }: { data: any; onC
   
       if (result && result.processedData) {
         setProcessedData(result.processedData);
+        setFeatureNameMapping(result.featureNameMapping || {});
         console.log("Processed Data Set:", result.processedData);
+        console.log("Feature Name Mapping Set:", result.featureNameMapping || {});
   
         setResultMessage("Feature extraction completed successfully.");
         console.log("Result Message Set:", "Feature extraction completed successfully");
@@ -133,7 +182,7 @@ export default function FeatureExtraction({ data, onComplete }: { data: any; onC
   const handleSubmit = () => {
     if (processedData) {
       console.log("Passing Processed Data to Workflow Stepper:", processedData);
-      onComplete({ ...data, featureExtraction: processedData });
+      onComplete({featureExtraction: processedData, featureNameMapping });
     } else {
       setResultMessage("Please run feature extraction before continuing.");
       setMessageType("error");
@@ -204,7 +253,7 @@ export default function FeatureExtraction({ data, onComplete }: { data: any; onC
         <TabsContent value="automatic" className="space-y-4">
           <Card>
             <CardContent className="pt-6">
-              <h3 className="text-sm font-medium mb-4">Extraction Methods</h3>
+              <h3 className="text-sm font-medium mb-4">Built-in Extraction Methods</h3>
               <div className="space-y-3">
                 <Label className="flex items-center space-x-2">
                   <Checkbox
@@ -254,6 +303,24 @@ export default function FeatureExtraction({ data, onComplete }: { data: any; onC
                   <span>Isomap</span>
                 </Label>
               </div>
+
+              {/* Custom Methods Section */}
+              {customMethods.length > 0 && (
+                <>
+                  <h3 className="text-sm font-medium mb-4 mt-6">Custom Extraction Methods</h3>
+                  <div className="space-y-3">
+                    {customMethods.map((method) => (
+                      <Label key={method.filename} className="flex items-center space-x-2">
+                        <Checkbox
+                          checked={selectedMethods.includes(method.filename)}
+                          onCheckedChange={() => handleMethodToggle(method.filename)}
+                        />
+                        <span>{method.name}</span>
+                      </Label>
+                    ))}
+                  </div>
+                </>
+              )}
             </CardContent>
           </Card>
         </TabsContent>
@@ -277,13 +344,6 @@ export default function FeatureExtraction({ data, onComplete }: { data: any; onC
           </Card>
         </TabsContent>
       </Tabs>
-{/* 
-      
-      <div className="text-xs text-gray-500 mb-2">
-        <p>Alert Message: {resultMessage || 'None'}</p>
-        <p>Message Type: {messageType || 'None'}</p>
-        <p>Processed Data: {processedData ? 'Available' : 'None'}</p>
-      </div> */}
 
       <div className="flex justify-end gap-2">
         <Button

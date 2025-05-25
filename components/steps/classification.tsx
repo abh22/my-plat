@@ -1,119 +1,377 @@
 "use client"
 
-import { useState } from "react"
-import { Upload, FileUp } from "lucide-react"
-import { Button } from "@/components/ui/button"
-import { Card, CardContent } from "@/components/ui/card"
-import { Input } from "@/components/ui/input"
-import { Label } from "@/components/ui/label"
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { useState, useEffect } from "react";
+import { CheckCircle, AlertCircle, Loader2 } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent } from "@/components/ui/card";
+import { Label } from "@/components/ui/label";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
+import { Alert, AlertTitle, AlertDescription } from "@/components/ui/alert";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import {
+  BarChart,
+  Bar,
+  XAxis,
+  YAxis,
+  Tooltip,
+  ResponsiveContainer,
+  CartesianGrid,
+  Cell,
+  Legend,
+  PieChart,
+  Pie,
+} from "recharts";
 
-export default function DataImport({ data, onComplete }: { data: any; onComplete: (data: any) => void }) {
-  const [files, setFiles] = useState<File[]>([])
-  const [url, setUrl] = useState("")
-  const [activeTab, setActiveTab] = useState("upload")
+// Define interface for custom methods
+interface CustomMethod {
+  name: string;
+  filename: string;
+  description: string;
+  category: string;
+}
 
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files && e.target.files.length > 0) {
-      console.log("Files selected:", e.target.files.length)
-      setFiles(Array.from(e.target.files))
+export default function Classification({ data, onComplete }: { data: any; onComplete: (data: any) => void }) {
+  // Access selected features from feature evaluation step
+  const selectedFeatures = data?.feature_evaluation?.selectedFeatures || [];
+  const originalData = data?.feature_evaluation?.originalData || [];
+  const [model, setModel] = useState("kmeans");
+  const [activeTab, setActiveTab] = useState("models");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [success, setSuccess] = useState<string | null>(null);
+  const [classificationResult, setClassificationResult] = useState<any>(null);
+  // Add custom methods state
+  const [customMethods, setCustomMethods] = useState<CustomMethod[]>([]);
+  const [selectedCustomMethods, setSelectedCustomMethods] = useState<string[]>([]);  // Get all available columns from the original data  
+  const availableColumns = originalData && originalData.length > 0 
+    ? Object.keys(originalData[0] || {})
+    : [];
+    
+  // Fetch custom methods from the backend
+  useEffect(() => {
+    const fetchCustomMethods = async () => {
+      try {
+        console.log("Fetching custom classification methods...");
+        const response = await fetch("http://localhost:8000/list-methods/");
+        if (!response.ok) {
+          console.error("Failed to fetch custom methods:", response.statusText);
+          return;
+        }
+        
+        const data = await response.json();
+        if (data.methods) {
+          // Filter methods by category (classification)
+          const classificationMethods = data.methods.filter(
+            (method: CustomMethod) => method.category === "classification" || method.category === ""
+          );
+          setCustomMethods(classificationMethods);
+          console.log("Fetched custom classification methods:", classificationMethods);
+        } else {
+          console.log("No methods found in response:", data);
+        }
+      } catch (error) {
+        console.error("Error fetching custom methods:", error);
+      }
+    };
+
+    fetchCustomMethods();
+  }, []);
+    
+  // Fetch custom methods from the backend
+  useEffect(() => {
+    const fetchCustomMethods = async () => {
+      try {
+        console.log("Fetching custom classification methods...");
+        const response = await fetch("http://localhost:8000/list-methods/");
+        if (!response.ok) {
+          console.error("Failed to fetch custom methods:", response.statusText);
+          return;
+        }
+        
+        const data = await response.json();
+        if (data.methods) {
+          // Filter methods by category (classification)
+          const classificationMethods = data.methods.filter(
+            (method: CustomMethod) => method.category === "classification" || method.category === ""
+          );
+          setCustomMethods(classificationMethods);
+          console.log("Fetched custom classification methods:", classificationMethods);
+        } else {
+          console.log("No methods found in response:", data);
+        }
+      } catch (error) {
+        console.error("Error fetching custom methods:", error);
+      }
+    };
+
+    fetchCustomMethods();
+  }, []);
+  
+  const handleRunClassification = async () => {
+    if (selectedFeatures.length === 0) {
+      setError("No features selected for clustering. Please go back to Feature Evaluation.");
+      return;
     }
-  }
 
+    setLoading(true);
+    setError(null);
+    setSuccess(null);
+    
+    try {
+      // Combine selected features with original data
+      const featureData = originalData.map((row: any) => {
+        const filteredRow: any = {};
+        // Include only selected features
+        selectedFeatures.forEach((col: string | number) => {
+          if (row.hasOwnProperty(col)) {
+            filteredRow[col] = row[col];
+          }
+        });
+        return filteredRow;
+      });
+      
+      // Prepare the payload for the clustering API
+      const payload = {
+        features: featureData,
+      };
+      
+      console.log("Running clustering with model:", model);
+        // Determine if we're using a custom method
+      const isCustomMethod = customMethods.some(method => method.filename === model);
+      
+      // Create form data for the API call
+      const formData = new FormData();
+      formData.append("model_type", model);
+      formData.append("features", new Blob([JSON.stringify(payload)], { type: "application/json" }));
+      formData.append("target", ""); // Empty target for unsupervised learning
+      
+      // Add flag to indicate if this is a custom method
+      if (isCustomMethod) {
+        formData.append("is_custom_method", "true");
+      }
+      
+      // Send request to the backend
+      const response = await fetch("http://localhost:8004/classification", {
+        method: "POST",
+        body: formData,
+      });
+      
+      const result = await response.json();
+      console.log("Clustering result:", result);
+      
+      if (result.error) {
+        setError(`Error from server: ${result.error}`);
+      } else {
+        setClassificationResult(result);
+        setSuccess("Clustering completed successfully!");
+        // Switch to results tab
+        setActiveTab("results");
+      }
+    } catch (error: any) {
+      console.error("Classification error:", error);
+      setError(`Error: ${error.message || "An unknown error occurred"}`);
+    } finally {
+      setLoading(false);
+    }
+  };
   const handleSubmit = () => {
-    const importData = {
-      method: activeTab,
-      files: files.map((f) => f.name),
-      fileObjects: files, // storing file
-      url: url,
+    const clusteringData = {
+      model: model,
+      selectedFeatures: selectedFeatures,
+      results: classificationResult
     }
-    console.log("Submitting import data:", importData)
-    console.log("File objects included:", files.length)
-    onComplete(importData)
+    console.log("Submitting clustering data:", clusteringData);
+    onComplete(clusteringData);
   }
 
   return (
-    <div className="space-y-6">
-      {/* <p className="text-muted-foreground">
-        Import your dataset by uploading files or providing a URL to your data source.
+    <div className="p-4 space-y-6 max-w-3xl mx-auto">      <h2 className="text-2xl font-bold">Clustering Analysis</h2>
+      <p className="text-muted-foreground">
+        Analyze data patterns using unsupervised clustering algorithms.
       </p>
 
-      <Tabs defaultValue="upload" value={activeTab} onValueChange={setActiveTab}>
-        <TabsList className="grid w-full grid-cols-">
-          <TabsTrigger value="upload">Upload Files</TabsTrigger>
-          <TabsTrigger value="url">From URL</TabsTrigger>
+      {/* Success and Error Messages */}
+      {error && (
+        <Alert variant="destructive">
+          <AlertCircle className="h-4 w-4" />
+          <AlertTitle>Error</AlertTitle>
+          <AlertDescription>{error}</AlertDescription>
+        </Alert>
+      )}
+
+      {success && (
+        <Alert variant="default" className="bg-green-50 border-green-200">
+          <CheckCircle className="h-4 w-4 text-green-600" />
+          <AlertTitle className="text-green-800">{success}</AlertTitle>
+        </Alert>
+      )}
+
+      {/* Feature information */}
+      <Card className="p-4">
+        <h3 className="font-semibold mb-3">Selected Features</h3>
+        <p className="text-sm text-muted-foreground mb-2">
+          You have selected {selectedFeatures.length} feature{selectedFeatures.length !== 1 ? 's' : ''} for classification:
+        </p>
+        <div className="max-h-40 overflow-y-auto border p-2 rounded-md mb-2">
+          <ul className="list-disc pl-5 space-y-1 text-sm">
+            {selectedFeatures.map((feature: string, index: number) => (
+              <li key={index}>{feature}</li>
+            ))}
+          </ul>
+        </div>
+      </Card>
+
+      {/* Tabs for model selection, parameters and results */}
+      <Tabs defaultValue="models" value={activeTab} onValueChange={setActiveTab}>        <TabsList className="grid grid-cols-2 mb-4">
+          <TabsTrigger value="models">Algorithm Selection</TabsTrigger>
+          <TabsTrigger value="results" disabled={!classificationResult}>Results</TabsTrigger>
         </TabsList>
 
-        <TabsContent value="upload" className="space-y-4"> */}
-          <Card>
-            <CardContent className="pt-6">
-              <div className="flex flex-col items-center justify-center border-2 border-dashed border-muted-foreground/25 rounded-lg p-12 text-center">
-                <Upload className="h-10 w-10 text-muted-foreground mb-4" />
-                <p className="mb-2 text-sm text-muted-foreground">
-                  <span className="font-semibold">Click to upload</span> or drag and drop
-                </p>
-                <p className="text-xs text-muted-foreground">CSV, Excel, JSON (up to 10MB)</p>
-                <div className="relative"><Input
-                  id="file-upload"
-                  type="file"
-                  className="absolute inset-0 opacity-0 w-full cursor-pointer"
-                  onChange={handleFileChange}
-                  multiple
-                  accept=".csv,.xlsx,.json"
-                />
-               
-                  <Button  variant="outline" className="gap-2">
-                    <FileUp className="h-4 w-4" />
-                    Select Files
-                  </Button>
+        <TabsContent value="models" className="space-y-4">
+          <Card className="p-4">
+            <CardContent className="pt-6 px-0">
+              <RadioGroup value={model} onValueChange={setModel}>
+                <div className="space-y-3">
+                  <div className="flex items-center space-x-2">
+                    <RadioGroupItem value="kmeans" id="radio_kmeans" />
+                    <Label htmlFor="radio_kmeans" className="font-medium">K-Means Clustering</Label>
                   </div>
-              </div>
+                  <div className="flex items-center space-x-2">
+                    <RadioGroupItem value="dbscan" id="radio_dbscan" />
+                    <Label htmlFor="radio_dbscan" className="font-medium">DBSCAN (Density-Based Clustering)</Label>
+                  </div>                  <div className="flex items-center space-x-2">
+                    <RadioGroupItem value="hierarchical" id="radio_hierarchical" />
+                    <Label htmlFor="radio_hierarchical" className="font-medium">Hierarchical Clustering</Label>
+                  </div>
 
-              {files.length > 0 && (
-                <div className="mt-4">
-                  <h3 className="text-sm font-medium mb-2">Selected files:</h3>
-                  <ul className="text-sm text-muted-foreground space-y-1">
-                    {files.map((file, index) => (
-                      <li key={index} className="flex items-center">
-                        <span>{file.name}</span>
-                        <span className="ml-2 text-xs">({(file.size / 1024).toFixed(1)} KB)</span>
-                      </li>
-                    ))}
-                  </ul>
+                  {/* Custom Methods Section */}
+                  {customMethods.length > 0 && (
+                    <>
+                      <div className="my-4 border-t pt-4">
+                        <h4 className="font-semibold mb-3">Custom Classification Methods</h4>
+                        {customMethods.map((method) => (
+                          <div key={method.filename} className="flex items-center space-x-2 mb-2">
+                            <RadioGroupItem value={method.filename} id={`radio_${method.filename}`} />
+                            <div>
+                              <Label htmlFor={`radio_${method.filename}`} className="font-medium">{method.name}</Label>
+                              {method.description && (
+                                <p className="text-xs text-muted-foreground">{method.description}</p>
+                              )}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </>
+                  )}
                 </div>
-              )}
-            </CardContent>
-          </Card>
-        
-
-        {/* <TabsContent value="url">
-          <Card>
-            <CardContent className="pt-6 space-y-4">
-              <div className="grid w-full items-center gap-1.5">
-                <Label htmlFor="url">Data Source URL</Label>
-                <Input
-                  id="url"
-                  type="url"
-                  placeholder="https://example.com/data.csv"
-                  value={url}
-                  onChange={(e) => setUrl(e.target.value)}
-                />
-                <p className="text-xs text-muted-foreground">Enter the URL of your CSV, Excel, or JSON data source</p>
-              </div>
+              </RadioGroup>
             </CardContent>
           </Card>
         </TabsContent>
-      </Tabs> */}
 
-      <div className="flex justify-end">
-        <Button
-          onClick={handleSubmit}
-          disabled={(activeTab === "upload" && files.length === 0) || (activeTab === "url" && !url)}
-        >
-          Continue
-        </Button>
-      </div>
-    </div>
-  )
-}
-
+        {/* <TabsContent value="parameters" className="space-y-4">
+          <Card className="p-4">
+            <CardContent className="pt-6 space-y-4">
+              <div className="grid w-full items-center gap-3">
+                <Label htmlFor="targetColumn">Target Column (Class Label)</Label>
+                <Select
+                  value={targetColumn}
+                  onValueChange={(value) => setTargetColumn(value)}
+                >
+                  <SelectTrigger id="targetColumn" className="w-full">
+                    <SelectValue placeholder="Select target column" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {availableColumns.map((column) => (
+                      <SelectItem key={column} value={column}>
+                        {column}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <p className="text-xs text-muted-foreground">
+                  Select the column that contains the class labels you want to predict
+                </p>
+              </div>
+            </CardContent>
+          </Card>
+        </TabsContent> */}
+        
+        <TabsContent value="results" className="space-y-4">
+          {classificationResult && (
+            <div className="space-y-6">
+              {/* Metrics Overview */}
+              <Card className="p-4">
+                <h3 className="font-semibold mb-3">Clustering Results</h3>
+                <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+                  <div className="bg-blue-50 p-3 rounded-lg border border-blue-100">
+                    <div className="text-sm text-muted-foreground">Number of Clusters</div>
+                    <div className="text-xl font-bold">{classificationResult.numClusters}</div>
+                  </div>
+                  <div className="bg-green-50 p-3 rounded-lg border border-green-100">
+                    <div className="text-sm text-muted-foreground">Silhouette Score</div>
+                    <div className="text-xl font-bold">
+                      {classificationResult.metrics?.silhouette !== null 
+                        ? classificationResult.metrics?.silhouette.toFixed(2) 
+                        : "N/A"}
+                    </div>
+                  </div>
+                  <div className="bg-purple-50 p-3 rounded-lg border border-purple-100">
+                    <div className="text-sm text-muted-foreground">Explained Variance</div>
+                    <div className="text-xl font-bold">
+                      {classificationResult.explainedVariance !== null 
+                        ? `${(classificationResult.explainedVariance * 100).toFixed(2)}%` 
+                        : "N/A"}
+                    </div>
+                  </div>
+                </div>
+              </Card>
+              
+              {/* Cluster Distribution Chart */}
+              {classificationResult.metrics?.cluster_distribution && (
+                <Card className="p-4">
+                  <h3 className="font-semibold mb-3">Cluster Distribution</h3>
+                  <div className="h-64">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <BarChart
+                                            data={Object.entries(classificationResult.metrics.cluster_distribution)
+                                              .map(([name, value]) => ({ name, count: value }))}
+                                          >
+                                            {/* ...rest of your chart code */}
+                                          </BarChart>
+                                        </ResponsiveContainer>
+                                      </div>
+                                    </Card>
+                                  )}
+                                </div>
+                              )}
+                            </TabsContent>
+                          </Tabs>
+                    
+                          {/* Run and Submit Buttons */}
+                          <div className="flex gap-4">
+                            <Button
+                              onClick={handleRunClassification}
+                              disabled={loading || selectedFeatures.length === 0}
+                            >
+                              {loading ? (
+                                <>
+                                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                                  Running...
+                                </>
+                              ) : (
+                                "Run Clustering"
+                              )}
+                            </Button>
+                            <Button
+                              onClick={handleSubmit}
+                              disabled={!classificationResult}
+                              variant="secondary"
+                            >
+                              Submit Results
+                            </Button>
+                          </div>
+                        </div>
+                      );
+                    }
