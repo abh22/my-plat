@@ -9,6 +9,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Label } from "@/components/ui/label"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import Papa from "papaparse"
 import * as XLSX from "xlsx"
 import {
@@ -51,10 +52,33 @@ export default function DataVisualization({ data, onComplete }: { data: any; onC
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const chartRef = useRef<HTMLDivElement>(null)
+  const [ydataReport, setYdataReport] = useState<string | null>(null);
+  
+  const [boxplotReport, setBoxplotReport] = useState<string | null>(null);
 
   // Access data from previous step
   const importData = data?.data_import || {}
+//viz profiles
+const uploadAndProfile = async () => {
+  const file = importData?.fileObjects?.[0];
+  if (!file) return;
 
+  const formData = new FormData();
+  formData.append("file", file);
+
+  const res = await fetch("http://localhost:8003/eda/combined", {
+    method: "POST",
+    body: formData,
+  });
+
+  if (res.ok) {
+    const json = await res.json();
+    setYdataReport(json.ydata);
+    setBoxplotReport(json.boxplots);
+  } else {
+    console.error("Failed to generate combined report");
+  }
+};
   // Process the imported data when component mounts or importData changes
   useEffect(() => {
     if (!importData.files?.length && !importData.url) return
@@ -336,42 +360,40 @@ export default function DataVisualization({ data, onComplete }: { data: any; onC
     getCoreRowModel: getCoreRowModel(),
     getPaginationRowModel: getPaginationRowModel(),
   })
-
   // Render table view
   const renderTable = () => {
     if (!processedData) return null
 
     return (
-      <div className="overflow-x-auto">
-        <table className="min-w-full divide-y divide-gray-200">
-          <thead>
-            {table.getHeaderGroups().map((headerGroup) => (
-              <tr key={headerGroup.id}>
-                {headerGroup.headers.map((header) => (
-                  <th
-                    key={header.id}
-                    className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider"
-                  >
-                    {flexRender(header.column.columnDef.header, header.getContext())}
-                  </th>
-                ))}
-              </tr>
-            ))}
-          </thead>
-          <tbody className="bg-white divide-y divide-gray-200">
-            {table.getRowModel().rows.map((row) => (
-              <tr key={row.id}>
-                {row.getVisibleCells().map((cell) => (
-                  <td key={cell.id} className="px-4 py-2 whitespace-nowrap text-sm text-gray-500">
-                    {flexRender(cell.column.columnDef.cell, cell.getContext())}
-                  </td>
-                ))}
-              </tr>
-            ))}
-          </tbody>
-        </table>
+      <div className="w-full flex flex-col h-full">
+        <div className="rounded-md border overflow-x-auto overflow-y-auto flex-1 max-h-[320px]">
+          <Table>
+            <TableHeader className="sticky top-0 bg-white z-10">
+              {table.getHeaderGroups().map((headerGroup) => (
+                <TableRow key={headerGroup.id}>
+                  {headerGroup.headers.map((header) => (
+                    <TableHead key={header.id}>
+                      {flexRender(header.column.columnDef.header, header.getContext())}
+                    </TableHead>
+                  ))}
+                </TableRow>
+              ))}
+            </TableHeader>
+            <TableBody>
+              {table.getRowModel().rows.map((row) => (
+                <TableRow key={row.id}>
+                  {row.getVisibleCells().map((cell) => (
+                    <TableCell key={cell.id}>
+                      {flexRender(cell.column.columnDef.cell, cell.getContext())}
+                    </TableCell>
+                  ))}
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </div>
         <div className="flex items-center justify-between mt-4">
-          <div className="text-sm text-gray-500">
+          <div className="text-sm text-muted-foreground">
             Showing {table.getState().pagination.pageIndex * table.getState().pagination.pageSize + 1} to{" "}
             {Math.min(
               (table.getState().pagination.pageIndex + 1) * table.getState().pagination.pageSize,
@@ -635,10 +657,9 @@ export default function DataVisualization({ data, onComplete }: { data: any; onC
 
     console.log("Submitting visualization data:", visualizationData)
     onComplete(visualizationData)
-  }
-
+  };
   return (
-    <div className="space-y-6">
+    <div className="space-y-6 w-full max-w-full">
       <div className="flex flex-col space-y-2">
         <h3 className="text-base font-medium">Data Visualization</h3>
         <p className="text-sm text-muted-foreground">
@@ -670,10 +691,8 @@ export default function DataVisualization({ data, onComplete }: { data: any; onC
           <AlertTitle>Error</AlertTitle>
           <AlertDescription>{error}</AlertDescription>
         </Alert>
-      )}
-
-      <div className="grid gap-6 md:grid-cols-2 ">
-        <Card>
+      )}      <div className="grid gap-6 md:grid-cols-3 w-full">
+        <Card className="col-span-1">
           <CardContent className="pt-6">
             <h3 className="text-sm font-medium mb-4">Visualization Type</h3>
             <Tabs defaultValue="table" value={selectedChart} onValueChange={setSelectedChart}>
@@ -715,7 +734,7 @@ export default function DataVisualization({ data, onComplete }: { data: any; onC
                   </Select>
                 </div>
 
-                <div className="grid w-full items-center gap-1.5">
+                <div className="grid  items-center gap-1.5">
                   <Label htmlFor="y-axis">{selectedChart === "pie" ? "Value" : "Y-Axis"}</Label>
                   <Select value={yAxis} onValueChange={setYAxis}>
                     <SelectTrigger>
@@ -740,15 +759,11 @@ export default function DataVisualization({ data, onComplete }: { data: any; onC
                   <li>Rows: {processedData.data.length}</li>
                   <li>Columns: {processedData.columns.length}</li>
                   <li>
-                    Column types:{" "}
-                    {processedData.columns
-                      .slice(0, 3)
-                      .map((col) => {
-                        const sampleValue = processedData.data[0]?.[col]
-                        return `${col} (${typeof sampleValue})`
-                      })
-                      .join(", ")}
-                    {processedData.columns.length > 3 ? "..." : ""}
+                    Column types: {processedData.columns.slice(0, 5).map((col) => {
+                      const sampleValue = processedData.data[0]?.[col];
+                      return `${col} (${typeof sampleValue})`;
+                    }).join(", ")}
+                    {processedData.columns.length > 5 ? "..." : ""}
                   </li>
                 </ul>
               </div>
@@ -756,10 +771,9 @@ export default function DataVisualization({ data, onComplete }: { data: any; onC
           </CardContent>
         </Card>
 
-        <Card>
+        <Card className="col-span-2">
           <CardContent className="pt-6">
-            <h3 className="text-sm font-medium mb-4">Visualization Preview</h3>
-            <div className="h-[300px] bg-muted/30 rounded-md overflow-hidden flex items-center justify-center">
+            <h3 className="text-sm font-medium mb-4">Visualization Preview</h3>            <div className="h-[400px] bg-muted/30 rounded-md overflow-hidden flex items-center justify-center w-full">
               {isLoading ? (
                 <div className="text-center">
                   <p className="text-sm text-muted-foreground">Processing data...</p>
@@ -770,7 +784,7 @@ export default function DataVisualization({ data, onComplete }: { data: any; onC
                 </div>
               ) : (
                 <Tabs value={selectedChart} className="w-full h-full">
-                  <TabsContent value="table" className="h-full p-4">
+                  <TabsContent value="table" className="h-full p-4 w-full flex flex-col">
                     {renderTable()}
                   </TabsContent>
                   <TabsContent value="bar" className="h-full p-4">
@@ -789,7 +803,10 @@ export default function DataVisualization({ data, onComplete }: { data: any; onC
         </Card>
       </div>
 
-      <div className="flex justify-end">
+      <div className="flex justify-end gap-2 mb-5">
+        <Button onClick={uploadAndProfile} disabled={isLoading}>
+          Generate Profile Report 
+        </Button>
         <Button onClick={handleSubmit} disabled={
   isLoading || 
   !processedData || 
@@ -798,6 +815,53 @@ export default function DataVisualization({ data, onComplete }: { data: any; onC
           Continue
         </Button>
       </div>
+      <Card>
+  <CardContent>
+{(ydataReport || boxplotReport) && (
+  <>
+   
+    <div
+      style={{
+        width: "100%",
+        maxHeight: "700px",
+        overflowY: "auto",
+        // border: "1px solid #ccc",
+        marginTop: "1rem",
+        padding: "1rem",
+        backgroundColor: "#fff",
+      }}
+    >
+      {/* Embed YData report */}
+      {ydataReport && (
+        <iframe
+          srcDoc={ydataReport}
+          title="YData Profiling Report"
+          sandbox="allow-scripts allow-same-origin"
+          style={{
+            width: "100%",
+            height: "600px",
+            border: "none",
+          }}
+        />
+      )}
+
+      {/* Append boxplots right after YData report */}
+      {boxplotReport && (
+        <div
+          dangerouslySetInnerHTML={{ __html: boxplotReport }}
+          style={{
+            marginTop: "2rem",
+          }}
+        />
+      )}
+    </div>
+  </>
+)}
+
+
+  </CardContent>
+</Card>
+
     </div>
   )
 }
