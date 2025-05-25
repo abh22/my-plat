@@ -54,3 +54,9 @@ test_*.py
 **/*.spec.ts
 **/*.spec.jsx
 **/*.spec.tsx
+
+# Local bash crash dumps
+bash.exe.stackdump
+# Final dataset output
+final_dataset.csv
+
