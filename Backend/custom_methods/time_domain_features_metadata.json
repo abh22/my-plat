@@ -1,0 +1,7 @@
+{
+  "name": "Time-domain Features",
+  "filename": "time_domain_features.py",
+  "description": "Extract various time-domain EMG features such as MAV, RMS, WL, ZC, SSC, variance, skewness, kurtosis, and more.",
+  "category": "extraction",
+  "created": "2025-05-29T12:10:00.000Z"
+}

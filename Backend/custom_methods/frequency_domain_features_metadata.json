@@ -1,0 +1,7 @@
+{
+  "name": "Frequency-domain Features",
+  "filename": "frequency_domain_features.py",
+  "description": "Extract features like mean power, total power, mean, median, and peak frequencies from EMG segments using FFT.",
+  "category": "extraction",
+  "created": "2025-05-29T12:20:00.000Z"
+}

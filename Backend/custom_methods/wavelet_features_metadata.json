@@ -1,0 +1,7 @@
+{
+  "name": "Wavelet Features",
+  "filename": "wavelet_features.py",
+  "description": "Compute wavelet-based features, such as Shannon wavelet entropy, from EMG signal segments.",
+  "category": "extraction",
+  "created": "2025-05-29T12:25:00.000Z"
+}

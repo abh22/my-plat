@@ -1,0 +1,7 @@
+{
+  "name": "Entropy Features",
+  "filename": "entropy_features.py",
+  "description": "Compute entropy-based features including Shannon, Sample, and Approximate entropies from EMG signal segments.",
+  "category": "extraction",
+  "created": "2025-05-29T12:15:00.000Z"
+}

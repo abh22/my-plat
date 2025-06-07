@@ -55,17 +55,24 @@ async def extraction(file: UploadFile = File(...), config: str = Form(...)):
             try:
                 # Parse the JSON content
                 data = json.loads(content.decode("utf-8"))
-                print("Successfully parsed JSON content")
-                
-                # Extract processedData and featureNameMapping
-                if "processedData" in data and isinstance(data["processedData"], list):
-                    df = pd.DataFrame(data["processedData"])
-                    print("Loaded DataFrame from 'processedData' list")
-                elif "processedData" in data and isinstance(data["processedData"], dict):
-                    # Handle nested structures by normalizing the JSON
-                    df = pd.json_normalize(data["processedData"])
-                    print("Loaded DataFrame from 'processedData' dict using json_normalize")
-                
+                # If direct array provided, load it
+                if isinstance(data, list):
+                    df = pd.DataFrame(data)
+                    print("Loaded DataFrame from JSON array payload")
+                else:
+                    # Extract DataFrame payload; support both 'processedData' and 'data' keys
+                    if "processedData" in data:
+                        payload = data["processedData"]
+                    elif "data" in data:
+                        payload = data["data"]
+                    else:
+                        payload = None
+                    if isinstance(payload, list):
+                        df = pd.DataFrame(payload)
+                        print("Loaded DataFrame from payload list")
+                    elif isinstance(payload, dict):
+                        df = pd.json_normalize(payload)
+                        print("Loaded DataFrame from payload dict using json_normalize")
                 # Get feature name mapping if available
                 featureNameMapping = data.get("featureNameMapping", {})
                 

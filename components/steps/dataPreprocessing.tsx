@@ -1,14 +1,15 @@
-import { useState, useEffect } from "react"
+import React, { useState, useEffect, useMemo } from "react"
+import Papa from "papaparse"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Label } from "@/components/ui/label"
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Input } from "@/components/ui/input"
 import { AlertCircle, CheckCircle, XCircle } from "lucide-react"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import CustomMethodParams from "@/components/custom-method-params"
+
 
 // Define interface for custom methods
 interface CustomMethod {
@@ -16,6 +17,13 @@ interface CustomMethod {
   filename: string;
   description: string;
   category: string;
+}
+
+// Add type declaration for window._dataChunks
+declare global {
+  interface Window {
+    _dataChunks?: any[][];
+  }
 }
 
 export default function DataPreprocessing({ data, onComplete }: { data: any; onComplete: (data: any) => void }) {
@@ -27,19 +35,98 @@ export default function DataPreprocessing({ data, onComplete }: { data: any; onC
   const [resultMessage, setResultMessage] = useState<string | null>(null)
   const [messageType, setMessageType] = useState<"success" | "error" | null>(null)
   const [isLoading, setIsLoading] = useState(false)
+  const [visualizationData, setVisualizationData] = useState<any>(null)
+  const dataSummary = visualizationData?.dataSummary || {}
+  const [columns, setColumns] = useState<string[]>(dataSummary.columns || []);
 
-  const visualizationData = data.visualization || {}
-  const dataSummary = visualizationData.dataSummary || {}
-  const columns = dataSummary.columns || []
-  const [selectedColumns, setSelectedColumns] = useState<string[]>([])  
+  // State and filter for column selection
+  const [selectedColumns, setSelectedColumns] = useState<string[]>([])
+  const [columnFilter, setColumnFilter] = useState("")
+  const filteredColumns = useMemo(
+    () => columns.filter((col: string) => col.toLowerCase().includes(columnFilter.toLowerCase())),
+    [columns, columnFilter]
+  )
+
   const [processedData, setProcessedData] = useState<any>(null)
   const [featureNameMapping, setFeatureNameMapping] = useState<any>(null)
   const [encodingDetails, setEncodingDetails] = useState<any>(null)
+
+  // Raw data rows for 'Before' plot
+  const [rawRows, setRawRows] = useState<any[]>([])
+  // Parsing state
+  const [isParsing, setIsParsing] = useState(true)
+  // Time-series preview state
+  // const [previewData, setPreviewData] = useState<any[]>({});
+
+  // Time series comparison images
+  const [beforeSeriesImages, setBeforeSeriesImages] = useState<Record<string, string>>({});
+  const [afterSeriesImages, setAfterSeriesImages] = useState<Record<string, string>>({});
 
   // Add custom methods state
   const [customMethods, setCustomMethods] = useState<CustomMethod[]>([])
   const [selectedCustomMethods, setSelectedCustomMethods] = useState<string[]>([])
   const [customMethodParams, setCustomMethodParams] = useState<Record<string, Record<string, any>>>({})
+
+  useEffect(() => {
+    // Check if we have data from previous steps
+    const previousData = data.visualization?.dataSummary?.dataFrame || [];
+    
+    if (previousData.length > 0) {
+      console.log("Using data from previous component", previousData.length, "rows");
+      setRawRows(previousData);
+      setIsParsing(false);
+      
+      // If we have columns from visualization, use them for the selectedColumns
+      const visualizationColumns = data.visualization?.dataSummary?.columns || [];
+      if (visualizationColumns.length > 0 && selectedColumns.length === 0) {
+        console.log("Setting columns from visualization data:", visualizationColumns);
+        // Ensure the columns dropdown is populated
+        setColumns(visualizationColumns);
+        setSelectedColumns(visualizationColumns);
+      }
+      return;
+    }
+    
+    // Fallback to file parsing if needed
+    setIsParsing(true);
+    const file = data.data_import?.fileObjects?.[0] || data.file;
+    if (!file || !(file instanceof File)) {
+      setIsParsing(false);
+      return;
+    }
+    
+    console.log("Parsing file as fallback - this should only happen if visualization data isn't available");
+    if (file.name.endsWith('.csv')) {
+      Papa.parse(file, { 
+        header: true, 
+        dynamicTyping: true, 
+        complete: (res) => {
+          const parsedData = res.data as any[];
+          setRawRows(parsedData);
+          
+          // Also update columns from parsed file if needed
+          if (columns.length === 0) {
+            const fileColumns = Object.keys(parsedData[0] || {});
+            setColumns(fileColumns);
+          }
+          setIsParsing(false);
+        } 
+      });
+    } else if (file.name.endsWith('.json')) {
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        try {
+          const json = JSON.parse(e.target?.result as string);
+          setRawRows(Array.isArray(json) ? json : json.data || []);
+        } catch {}
+        setIsParsing(false);
+      };
+      reader.readAsText(file);
+    }
+  }, [data.data_import, data.file, data.visualization]);
+
+  // Raw imported or processed rows for 'Before' plot
+  const beforeRows: any[] = rawRows
 
   // Fetch custom methods from the backend
   useEffect(() => {
@@ -70,40 +157,33 @@ export default function DataPreprocessing({ data, onComplete }: { data: any; onC
 
     fetchCustomMethods();
   }, []);
+
+  // Add effect to synchronize custom methods with operations
   useEffect(() => {
-    if (columns && columns.length > 0) {
-      // Set initially selected columns
-      setSelectedColumns(columns)
-      console.log("Initial columns from data:", columns)
-    }
-  }, [columns])
-    // Add effect to synchronize custom methods with operations
-useEffect(() => {
-  setSelectedOperations(prev => {
-    const hasCustom = prev.includes("custom");
-    const wantsCustom = selectedCustomMethods.length > 0;
+    setSelectedOperations(prev => {
+      const hasCustom = prev.includes("custom");
+      const wantsCustom = selectedCustomMethods.length > 0;
 
-    if (hasCustom === wantsCustom) return prev; // No change
-    if (wantsCustom) return [...prev, "custom"];
-    return prev.filter(op => op !== "custom");
-  });
-}, [selectedCustomMethods]);
-
+      if (hasCustom === wantsCustom) return prev; // No change
+      if (wantsCustom) return [...prev, "custom"];
+      return prev.filter(op => op !== "custom");
+    });
+  }, [selectedCustomMethods]);
 
   const handleOperationToggle = (operation: string) => {
-  if (operation === "custom") return; // Prevent manual toggle
+    if (operation === "custom") return; // Prevent manual toggle
 
-  const isCustomMethod = customMethods.some(method => method.filename === operation);
-  if (isCustomMethod) {
-    setSelectedCustomMethods(prev => 
-      prev.includes(operation) ? prev.filter(m => m !== operation) : [...prev, operation]
-    );
-  } else {
-    setSelectedOperations(prev => 
-      prev.includes(operation) ? prev.filter(op => op !== operation) : [...prev, operation]
-    );
+    const isCustomMethod = customMethods.some(method => method.filename === operation);
+    if (isCustomMethod) {
+      setSelectedCustomMethods(prev => 
+        prev.includes(operation) ? prev.filter(m => m !== operation) : [...prev, operation]
+      );
+    } else {
+      setSelectedOperations(prev => 
+        prev.includes(operation) ? prev.filter(op => op !== operation) : [...prev, operation]
+      );
+    }
   }
-};
 
 
   const handleColumnToggle = (column: string) => {
@@ -118,20 +198,169 @@ useEffect(() => {
         : [...prev, method]
     );
   }
-
   const handleRun = async () => {
     // Clear previous message when running again
     setResultMessage(null)
     setMessageType(null)
     setIsLoading(true)
-
-    // Create settings object
+    // Clear previous series images
+    setBeforeSeriesImages({})
+    setAfterSeriesImages({})
+    
+    // Prioritize data passed from previous component over raw rows
+    const visualizationDataFrame = data.visualization?.dataSummary?.dataFrame || [];
+    const beforeRowsData = visualizationDataFrame.length > 0
+      ? visualizationDataFrame
+      : rawRows;
+    
+    console.log("Raw data available:", beforeRowsData.length > 0);
+    console.log("Selected columns:", selectedColumns);
+    
+    if (beforeRowsData.length > 0 && selectedColumns.length > 0) {
+      try {
+        // Check the actual structure of the data
+        console.log("Data structure - first row:", beforeRowsData[0]);
+        console.log("Data object keys:", Object.keys(beforeRowsData[0]));
+        
+        // Convert all keys to lowercase for case-insensitive matching
+        const lowercaseKeys = beforeRowsData.length > 0 ? 
+          Object.keys(beforeRowsData[0]).map(k => k.toLowerCase()) : [];
+        console.log("Available keys (lowercase):", lowercaseKeys);
+          // Try to match selected columns with available columns (case-insensitive)
+        const validColumns = selectedColumns.filter(col => {
+          const colLower = col.toLowerCase();
+          // Check if column exists directly or in lowercase form
+          const exists = beforeRowsData.length > 0 && 
+            (col in beforeRowsData[0] || lowercaseKeys.includes(colLower));
+          
+          if (!exists) {
+            console.log(`Column "${col}" not found in data (checked lowercase: "${colLower}")`);
+          }
+          return exists;
+        });
+        
+        // Map the valid column names to their actual case in the data
+        const mappedColumns = validColumns.map(col => {
+          const colLower = col.toLowerCase();
+          if (beforeRowsData.length > 0 && col in beforeRowsData[0]) {
+            console.log(`Column "${col}" found as exact match`);
+            return col; // Exact match
+          }
+          // Find the actual key with matching lowercase
+          const actualKey = Object.keys(beforeRowsData[0]).find(
+            k => k.toLowerCase() === colLower
+          );
+          if (actualKey) {
+            console.log(`Column "${col}" mapped to "${actualKey}" (case difference)`);
+          }
+          return actualKey || col;
+        });
+        
+        console.log("Valid columns after case-insensitive matching:", mappedColumns);
+          if (mappedColumns.length === 0) {
+          console.warn("No valid columns found in the data for 'Before' plot");
+          // Try with all available columns as a fallback
+          if (beforeRowsData.length > 0) {
+            const allColumns = Object.keys(beforeRowsData[0]);
+            console.log("Trying with all available columns:", allColumns);
+            
+            // Instead of using all columns, let's still limit to selected columns if possible
+            // Find any matching columns (partial match)
+            const partialMatchColumns = selectedColumns.flatMap(selectedCol => {
+              const matches = allColumns.filter(col => 
+                col.toLowerCase().includes(selectedCol.toLowerCase()) || 
+                selectedCol.toLowerCase().includes(col.toLowerCase())
+              );
+              return matches.length > 0 ? matches : [];
+            });
+            
+            // Use partial matches if found, otherwise fall back to all columns but limit to first few
+            const columnsToUse = partialMatchColumns.length > 0 ? 
+              partialMatchColumns : 
+              allColumns.slice(0, Math.min(5, allColumns.length)); // Limit to max 5 columns
+            
+            console.log("Using columns for 'Before' plot:", columnsToUse);
+              const filteredRows = filterRowsByColumns(beforeRowsData, columnsToUse);
+            const beforeImgs = await fetchTimeseries(filteredRows, selectedColumns);
+            console.log("Before images response:", beforeImgs);
+            setBeforeSeriesImages(beforeImgs?.images || {});
+          }
+        } else {          console.log("Using mapped columns for 'Before' plot:", mappedColumns);          const filteredRows = filterRowsByColumns(beforeRowsData, mappedColumns);
+          console.log("Filtered rows sample:", filteredRows.slice(0, 2));
+          
+          // Add any selected columns that might be missing due to case or naming differences
+          selectedColumns.forEach(selectedCol => {
+            if (!mappedColumns.includes(selectedCol)) {
+              // Look for potential matches in available columns (case insensitive)
+              const potentialMatch = Object.keys(beforeRowsData[0]).find(
+                key => key.toLowerCase() === selectedCol.toLowerCase() || 
+                       key.toLowerCase().includes(selectedCol.toLowerCase()) ||
+                       selectedCol.toLowerCase().includes(key.toLowerCase())
+              );
+              
+              if (potentialMatch) {
+                mappedColumns.push(potentialMatch);
+                console.log(`Found match for "${selectedCol}": "${potentialMatch}"`);
+                // Update filtered rows with the matched data
+                filteredRows.forEach((row, i) => {
+                  row[selectedCol] = beforeRowsData[i][potentialMatch]; // Use selectedCol as the key, not potentialMatch
+                });
+              }
+            }
+          });
+          
+          console.log("Final mapped columns for 'Before' plot:", mappedColumns);
+          const beforeImgs = await fetchTimeseries(filteredRows, selectedColumns);
+          console.log("Before images response:", beforeImgs);
+          console.log("Before images keys:", Object.keys(beforeImgs?.images || {}));
+          setBeforeSeriesImages(beforeImgs?.images || {});
+        }      } catch (error) {
+        console.error("Error fetching before timeseries", error);
+      }
+    }
+      // Handle any missing channels generically
+    if (beforeRowsData.length > 0 && selectedColumns.length > 0 && Object.keys(beforeSeriesImages).length === 0) {
+      console.log("No 'Before' plots found for selected channels, attempting to create generic plots");
+      
+      try {        // Create a simple representation with the first available numerical column for each selected channel
+        const genericData = beforeRowsData.map((row: any) => {
+          const newRow: Record<string, number> = {};
+          const numericColumns = Object.entries(row)
+            .filter(([_, value]) => typeof value === 'number' || (typeof value === 'string' && !isNaN(Number(value))))
+            .map(([key]) => key);
+          
+          // Map numeric columns to selected channels if possible
+          selectedColumns.forEach((channel, index) => {
+            if (index < numericColumns.length) {
+              newRow[channel] = typeof row[numericColumns[index]] === 'number' ? 
+                row[numericColumns[index]] : 
+                Number(row[numericColumns[index]]);
+            }
+          });
+          
+          return newRow;
+        });
+        
+        if (Object.keys(genericData[0]).length > 0) {
+          console.log("Created generic data for plots:", genericData.slice(0, 2));
+          const genericImgs = await fetchTimeseries(genericData, selectedColumns);
+          if (genericImgs && genericImgs.images && Object.keys(genericImgs.images).length > 0) {
+            console.log("Generated generic 'Before' plots:", Object.keys(genericImgs.images));
+            setBeforeSeriesImages(genericImgs.images);
+          }
+        }
+      } catch (fallbackError) {
+        console.error("Error creating generic plots:", fallbackError);
+      }
+    }
+    
+      // Create settings object
     const settings: Record<string, any> = {
       missingValues,
       normalizationMethod,
       outlierThreshold: Number.parseFloat(outlierThreshold),
       encodingMethod: encodingMethods.length === 1 ? encodingMethods[0] : encodingMethods, // Send as string if only one, array if multiple
-    };    // Add custom methods if any are selected
+    };// Add custom methods if any are selected
     if (selectedCustomMethods.length > 0) {
       settings.customMethods = selectedCustomMethods;
       
@@ -145,37 +374,23 @@ useEffect(() => {
       console.log("Sending custom methods:", selectedCustomMethods);
       console.log("With parameters:", customMethodParams);
     }
-    
-    const config = {
+      const config = {
       operations: selectedOperations,
       columns: selectedColumns,
       settings: settings,
     }
-    const formData = new FormData()
-    formData.append("config", JSON.stringify(config))
-    const fileObject = data.data_import?.fileObjects?.[0] || data.file
-    if (!fileObject) {
-      console.error("No file object found")
-      setResultMessage("No file found to process")
-      setMessageType("error")
-      setIsLoading(false)
-      return
-    }
-    
-    formData.append("file", fileObject);
-      
-    // Add a new parameter to request available columns if needed
-    formData.append("get_available_columns", "true")
-      
+    // Send JSON payload instead of FormData to avoid multipart size limits
+    const payload = {
+      config,
+      data_from_visualization: visualizationDataFrame,
+      get_available_columns: true,
+    };
     try {
-      console.log("Sending config to API:", config);
-      console.log("Selected operations:", selectedOperations);
-      console.log("Selected columns:", selectedColumns.length);
-      console.log("Selected encoding methods:", encodingMethods);
-      
+      console.log("Sending JSON payload to API:", payload);
       const res = await fetch("http://localhost:8000/preprocess", {
         method: "POST",
-        body: formData,
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
       })
       
       if (!res.ok) {
@@ -183,80 +398,57 @@ useEffect(() => {
         const errorMessage = errorData.detail || `API responded with status: ${res.status}`;
         console.error("API error:", errorMessage);
         throw new Error(errorMessage);
-      }
-      
-      const result = await res.json()
+      }      const result = await res.json()
       console.log("API response:", result);
 
-      if (result.preview) {
-        console.log("Preview data:", result.preview)
-        
-        // Debug the actual data changes
-        if (result.preview.length > 0) {
-          console.log("First row keys:", Object.keys(result.preview[0]));
-          
-          // Check for encoding results
-          if (selectedOperations.includes("encode")) {
-            const oneHotColumns = Object.keys(result.preview[0]).filter(key => key.includes("_"));
-            console.log("Detected one-hot encoded columns:", oneHotColumns.slice(0, 5));
-          }
-          
-          // Check for normalization results
-          if (selectedOperations.includes("normalize")) {
-            const numericColumns = selectedColumns.filter(col => 
-              typeof result.preview[0][col] === 'number');
-            
-            if (numericColumns.length > 0) {
-              const sampleCol = numericColumns[0];
-              console.log(`Sample normalized values for ${sampleCol}:`, 
-                result.preview.slice(0, 3).map((row: { [x: string]: any }) => row[sampleCol]));
-            }
-          }
-        }
+      // Update processed data
+      if (result.processedData) {
+        setProcessedData(result.processedData);
+        setFeatureNameMapping(result.featureNameMapping || {});
+        console.log(`Processed data: ${result.processedData.length} rows`);
+      } else {
+        console.warn("No processed data returned from API");
+        throw new Error("No processed data returned from API");
       }
 
-      if (result.message) {
-        console.log("Message:", result.message)
+      // Determine final columns to plot (handle mismatches)
+      let finalCols = selectedColumns;
+      if (result.availableColumns && Array.isArray(result.availableColumns)) {
+        const missing = selectedColumns.filter(c => !result.availableColumns.includes(c));
+        if (missing.length > 0) {
+          const valid = selectedColumns.filter(c => result.availableColumns.includes(c));
+          finalCols = valid.length > 0 ? valid : result.availableColumns;
+          setSelectedColumns(finalCols);
+          setResultMessage(valid.length > 0
+            ? `Processed with ${valid.length} valid columns (${missing.length} dropped).`
+            : `No selected columns found; using all ${finalCols.length} available.`);
+          setMessageType(missing.length > 0 ? "error" : "success");
+        }
+      }      // Fetch after timeseries only with finalCols
+      if (result.processedData && finalCols.length) {
+        console.log("Processing 'After' plot with columns:", finalCols);
         
-        // Check if we need to update the selected columns based on what's available
-        if (result.availableColumns && Array.isArray(result.availableColumns)) {
-          const missingColumns = selectedColumns.filter(col => !result.availableColumns.includes(col));
+        // Make sure we only use columns that actually exist in the processed data
+        const validAfterCols = finalCols.filter(col => 
+          result.processedData.length > 0 && col in result.processedData[0]
+        );
+        
+        console.log("Valid columns for 'After' plot:", validAfterCols);
+        
+        if (validAfterCols.length === 0) {
+          console.warn("No valid columns found for 'After' plot");
+          setResultMessage("Preprocessing completed, but couldn't generate 'After' plots. Column mismatch detected.");
+          setMessageType("error");
+        } else {          const filteredRows = filterRowsByColumns(result.processedData, validAfterCols);
+          const afterImgs = await fetchTimeseries(filteredRows, validAfterCols);
+          console.log("After images response:", afterImgs);
+          setAfterSeriesImages(afterImgs?.images || {});
           
-          if (missingColumns.length > 0) {
-            console.warn("Some selected columns were not found in the dataset:", missingColumns);
-            // Update the selected columns to only include available ones
-            const validColumns = selectedColumns.filter(col => result.availableColumns.includes(col));
-            
-            if (validColumns.length === 0) {
-              // If none of the selected columns are valid, use all available columns instead
-              setSelectedColumns(result.availableColumns);
-              console.log("Using all available columns instead:", result.availableColumns);
-              setResultMessage("Your selected columns weren't found in the dataset. Using all available columns instead.");
-              setMessageType("error");
-            } else {
-              setSelectedColumns(validColumns);
-              setResultMessage(`Processed data successfully with ${validColumns.length} valid columns. (${missingColumns.length} selected columns were not found in the dataset)`);
-              setMessageType("success");
-            }
-          } else {
-            setResultMessage(result.message);
-            setMessageType("success");
-          }
-        } else {
-          setResultMessage(result.message);
+          // Indicate successful preprocessing and plotting
+          setResultMessage(result.message || "Preprocessing and plotting completed successfully.");
           setMessageType("success");
         }
-        
-        setProcessedData(result.processedData);
-        setFeatureNameMapping(result.featureNameMapping);
-        
-        // Store encoding details if available
-        if (result.encodingDetails) {
-          setEncodingDetails(result.encodingDetails);
-          console.log("Received encoding details:", result.encodingDetails);
-        }
-      }
-    } catch (err) {
+      }    } catch (err) {
       console.error("Error in preprocessing", err)
       // Provide more informative error message based on the error
       let errorMessage = "An error occurred during preprocessing."
@@ -266,6 +458,13 @@ useEffect(() => {
         // Special handling for common column-related errors
         if (err.message.includes("columns") || err.message.includes("KeyError")) {
           errorMessage = "Error with column selection. There may be a mismatch between the columns you selected and what's in the dataset."
+        } 
+      } else if (typeof err === 'object' && err !== null) {
+        // Convert object error to string to avoid [object Object] display
+        try {
+          errorMessage = JSON.stringify(err, null, 2);
+        } catch (e) {
+          errorMessage = "Complex error object. Check console for details.";
         }
       }
       setResultMessage(errorMessage)
@@ -274,7 +473,6 @@ useEffect(() => {
       setIsLoading(false)
     }
   }
-
   // Function to display the encoding preview
   const renderEncodingPreview = () => {
     if (!processedData || !featureNameMapping) return null;
@@ -302,97 +500,36 @@ useEffect(() => {
             </span>
           </p>
           
-          <Tabs defaultValue="columns" className="w-full">
-            <TabsList>
-              <TabsTrigger value="columns">Encoded Columns</TabsTrigger>
-              <TabsTrigger value="details">Encoding Details</TabsTrigger>
-            </TabsList>
-            
-            <TabsContent value="columns">
-              <div className="max-h-[250px] overflow-y-auto border rounded-md">
-                <table className="min-w-full divide-y divide-gray-200">
-                  <thead className="bg-gray-50">
-                    <tr>
-                      <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Original Column</th>
-                      <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Transformed To</th>
-                    </tr>
-                  </thead>
-                  <tbody className="bg-white divide-y divide-gray-200">
-                    {encodedColumns.map(col => (
-                      <tr key={col}>
-                        <td className="px-3 py-2 text-sm font-medium text-gray-900">{col}</td>
-                        <td className="px-3 py-2 text-sm text-gray-500">
-                          {featureNameMapping[col].length <= 3 ? (
-                            featureNameMapping[col].join(", ")
-                          ) : (
-                            <>
-                              {featureNameMapping[col].slice(0, 3).join(", ")}
-                              <span className="text-gray-400"> ... {featureNameMapping[col].length - 3} more</span>
-                            </>
-                          )}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+          <div className="max-h-[250px] overflow-y-auto border rounded-md">
+            <table className="min-w-full divide-y divide-gray-200">
+              <thead className="bg-gray-50">
+                <tr>
+                  <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Original Column</th>
+                  <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Transformed To</th>
+                </tr>
+              </thead>
+              <tbody className="bg-white divide-y divide-gray-200">
+                {encodedColumns.map(col => (
+                  <tr key={col}>
+                    <td className="px-3 py-2 text-sm font-medium text-gray-900">{col}</td>
+                    <td className="px-3 py-2 text-sm text-gray-500">
+                      {featureNameMapping[col].length <= 3 ? (
+                        featureNameMapping[col].join(", ")
+                      ) : (
+                        <>
+                          {featureNameMapping[col].slice(0, 3).join(", ")}
+                          <span className="text-gray-400"> ... {featureNameMapping[col].length - 3} more</span>
+                        </>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
               </div>
-            </TabsContent>
-            
-            <TabsContent value="details">
-              {encodingDetails ? (
-                <div className="max-h-[250px] overflow-y-auto border rounded-md">
-                  <table className="min-w-full divide-y divide-gray-200">
-                    <thead className="bg-gray-50">
-                      <tr>
-                        <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Column</th>
-                        <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Method</th>
-                        <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Original Values</th>
-                        {encodingMethods.includes("label") && (
-                          <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                            Encoded Values
-                          </th>
-                        )}
-                      </tr>
-                    </thead>
-                    <tbody className="bg-white divide-y divide-gray-200">
-                      {Object.keys(encodingDetails).map(col => (
-                        <tr key={col}>
-                          <td className="px-3 py-2 text-sm font-medium text-gray-900">{col}</td>
-                          <td className="px-3 py-2 text-sm text-gray-500">
-                            {encodingDetails[col].method === "onehot" ? "One-Hot" : "Label"}
-                          </td>
-                          <td className="px-3 py-2 text-sm text-gray-500">
-                            {encodingDetails[col].originalValues && encodingDetails[col].originalValues.length <= 3 ? (
-                              encodingDetails[col].originalValues.join(", ")
-                            ) : (
-                              <>
-                                {encodingDetails[col].originalValues && encodingDetails[col].originalValues.slice(0, 3).join(", ")}
-                                <span className="text-gray-400"> ... {encodingDetails[col].originalValues && encodingDetails[col].originalValues.length - 3} more</span>
-                              </>
-                            )}
-                          </td>
-                          {encodingMethods.includes("label") && encodingDetails[col].mapping && (
-                            <td className="px-3 py-2 text-sm text-gray-500">
-                              {Object.entries(encodingDetails[col].mapping).slice(0, 3).map(([key, value]) => (
-                                <div key={key}>{key}: {String(value)}</div>
-                              ))}
-                              {Object.keys(encodingDetails[col].mapping).length > 3 && (
-                                <span className="text-gray-400"> ... {Object.keys(encodingDetails[col].mapping).length - 3} more</span>
-                              )}
-                            </td>
-                          )}
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              ) : (
-                <p className="text-sm text-muted-foreground mt-2">No detailed encoding information available.</p>
-              )}
-            </TabsContent>
-          </Tabs>
-        </CardContent>
-      </Card>
+            </CardContent>
+          </Card>
+     
     );
   };
 
@@ -406,214 +543,987 @@ useEffect(() => {
       setResultMessage("Please run preprocessing before continuing.")
       setMessageType("error")
     }
-  }
-
-  // Render the appropriate alert based on message type
+  }  // Render the appropriate alert based on message type
   const renderAlert = () => {
     if (!resultMessage) return null
 
     if (messageType === "success") {
       return (
         <div className="flex justify-center mb-6">
-          <Alert variant="default" className="bg-green-50 border-green-200 max-w-fit inline-block flex items-center space-x-2">
-            <CheckCircle className="h-4 w-4 text-green-600" />
-            <AlertTitle className="text-green-800">{resultMessage}</AlertTitle>
+          <Alert variant="default" className="bg-green-50 border-green-200 max-w-3xl w-full flex items-start space-x-3 shadow-sm">
+            <div className="bg-green-100 p-1 rounded-full">
+              <CheckCircle className="h-5 w-5 text-green-600" />
+            </div>
+            <div className="flex-1">
+              <AlertTitle className="text-green-800 font-semibold mb-2 flex items-center">
+                <span className="mr-2">{resultMessage}</span>
+                <span className="bg-green-100 text-green-700 text-xs px-2 py-0.5 rounded-full">Success</span>
+              </AlertTitle>
+              
+              {selectedOperations.length > 0 && (
+                <AlertDescription className="text-green-700 text-sm mb-2">
+                  <span className="font-medium">Applied operations: </span>
+                  <div className="flex flex-wrap gap-1.5 mt-1">
+                    {selectedOperations.map(op => {
+                      let label = "";
+                      let details = "";
+                      
+                      switch(op) {
+                        case "missing": 
+                          label = "Missing Values"; 
+                          details = `(Method: ${missingValues})`;
+                          break;
+                        case "normalize": 
+                          label = "Normalization"; 
+                          details = `(Method: ${normalizationMethod})`;
+                          break;
+                        case "outliers": 
+                          label = "Outlier Removal"; 
+                          details = `(Threshold: ${outlierThreshold})`;
+                          break;
+                        case "encode": 
+                          label = "Encoding"; 
+                          details = `(${encodingMethods.join(', ')})`;
+                          break;
+                        case "custom": return null; // Already shown separately
+                        default: label = op;
+                      }
+                      
+                      return label ? (
+                        <span key={op} className="inline-flex items-center px-2 py-0.5 rounded-md text-xs font-medium bg-green-100 text-green-800 border border-green-200">
+                          {label} {details && <span className="ml-1 text-green-600 text-xs">{details}</span>}
+                        </span>
+                      ) : null;
+                    }).filter(Boolean)}
+                  </div>
+                </AlertDescription>
+              )}
+              
+              {selectedCustomMethods.length > 0 && (
+                <AlertDescription className="text-green-700 text-sm">
+                  <span className="font-medium">Applied custom methods: </span>
+                  <div className="flex flex-wrap gap-1.5 mt-1">
+                    {selectedCustomMethods.map(method => {
+                      const methodInfo = customMethods.find(m => m.filename === method);
+                      const methodName = methodInfo ? methodInfo.name : method;
+                      return (
+                        <span key={method} className="inline-flex items-center px-2 py-0.5 rounded-md text-xs font-medium bg-purple-100 text-purple-800 border border-purple-200">
+                          {methodName}
+                        </span>
+                      );
+                    })}
+                  </div>
+                </AlertDescription>
+              )}
+              
+              <div className="mt-2 text-xs text-green-600 flex items-center">
+                <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="mr-1">
+                  <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path>
+                  <polyline points="22 4 12 14.01 9 11.01"></polyline>
+                </svg>
+                Data is ready for the next step
+              </div>
+            </div>
           </Alert>
         </div>
       )
     } else if (messageType === "error") {
       return (
-        <Alert variant="destructive" className="mb-6">
-          <AlertCircle className="h-4 w-4" />
-          <AlertTitle>Error</AlertTitle>
-          <AlertDescription>{resultMessage}</AlertDescription>
+        <Alert variant="destructive" className="mb-6 border-red-300 bg-red-50 shadow-sm">
+          <div className="flex items-start space-x-3">
+            <div className="bg-red-100 p-1 rounded-full">
+              <XCircle className="h-5 w-5 text-red-600" />
+            </div>
+            <div className="flex-1">
+              <AlertTitle className="text-red-800 font-semibold mb-2 flex items-center">
+                <span className="mr-2">Processing Error</span>
+                <span className="bg-red-100 text-red-700 text-xs px-2 py-0.5 rounded-full">Failed</span>
+              </AlertTitle>
+              <AlertDescription className="text-sm text-red-700 mb-2">{resultMessage}</AlertDescription>
+
+              {selectedColumns.length > 0 && (
+                <div className="mt-2 text-sm">
+                  <p className="font-medium text-red-700 mb-1">Selected columns:</p>
+                  <div className="flex flex-wrap gap-1.5 mt-1">
+                    {selectedColumns.map(col => (
+                      <span key={col} className="inline-flex items-center px-2 py-0.5 rounded-md text-xs font-medium bg-red-100 text-red-800 border border-red-200">
+                        {col}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              <div className="mt-3 text-xs text-red-600 flex items-center">
+                <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="mr-1">
+                  <circle cx="12" cy="12" r="10"></circle>
+                  <line x1="12" y1="8" x2="12" y2="12"></line>
+                  <line x1="12" y1="16" x2="12.01" y2="16"></line>
+                </svg>
+                Try selecting different preprocessing options or check your data format
+              </div>
+            </div>
+          </div>
         </Alert>
       )
     }
-    return null  }
-
-  const runDisabled = 
+    return null
+  }
+  const runDisabled =
     !(selectedOperations.length > 0 || selectedCustomMethods.length > 0) ||
     selectedColumns.length === 0 ||
     isLoading ||
-    (selectedOperations.includes("encode") && encodingMethods.length === 0);
-
-  return (
+    isParsing;
+ return (
     <div className="space-y-6">
+      {/* Parsing indicator */}
+      {isParsing && <p className="text-sm text-gray-500">Parsing file...</p>}
       <p className="text-muted-foreground">Clean and transform your data to prepare it for analysis and modeling.</p>
 
       {/* Display the styled alert message */}
       {renderAlert()}
 
-      <div className="grid gap-6 md:grid-cols-2">
-        <Card>
+      {/* Two-column layout: columns selection on left, operations on right */}
+      <div className="grid grid-cols-2 gap-4">
+        {/* Apply to Columns */}
+        <Card className="hover:shadow-sm transition-shadow duration-200">
           <CardContent className="pt-6">
-            <h3 className="text-sm font-medium mb-4">Preprocessing Operations</h3>
-            <div className="space-y-3">
-              <Label className="flex items-center space-x-2">
-                <Checkbox
-                  checked={selectedOperations.includes("missing")}
-                  onCheckedChange={() => handleOperationToggle("missing")}
-                />
-                <span>Handle Missing Values</span>
-              </Label>
-
-              <Label className="flex items-center space-x-2">
-                <Checkbox
-                  checked={selectedOperations.includes("normalize")}
-                  onCheckedChange={() => handleOperationToggle("normalize")}
-                />
-                <span>Normalize Data - minmax</span>
-              </Label>
-
-              <Label className="flex items-center space-x-2">
-                <Checkbox
-                  checked={selectedOperations.includes("outliers")}
-                  onCheckedChange={() => handleOperationToggle("outliers")}
-                />
-                <span>Remove Outliers</span>
-              </Label>
-
-              <Label className="flex items-center space-x-2">
-                <Checkbox
-                  checked={selectedOperations.includes("encode")}
-                  onCheckedChange={() => handleOperationToggle("encode")}
-                />
-                <span>Encode Categorical Variables</span>
-              </Label>
-              
-              {selectedOperations.includes("encode") && (
-                <div className="ml-6 mt-2">
-                  <p className="text-sm text-muted-foreground mb-2">Encoding Methods (select one or both):</p>
-                  <div className="space-y-2">
-                    <Label className="flex items-center space-x-2">
-                      <Checkbox
-                        checked={encodingMethods.includes("onehot")}
-                        onCheckedChange={() => handleEncodingMethodToggle("onehot")}
-                      />
-                      <div>
-                        <span className="font-medium">One-Hot Encoding Only</span>
-                        <p className="text-xs text-muted-foreground">Apply one-hot encoding to all categorical columns.</p>
-                      </div>
-                    </Label>
-                    
-                    <Label className="flex items-center space-x-2">
-                      <Checkbox
-                        checked={encodingMethods.includes("label")}
-                        onCheckedChange={() => handleEncodingMethodToggle("label")}
-                      />
-                      <div>
-                        <span className="font-medium">Label Encoding Only</span>
-                        <p className="text-xs text-muted-foreground">Apply label encoding to all categorical columns.</p>
-                      </div>
-                    </Label>
-                    
-                    {encodingMethods.length === 2 && (
-                      <div className="mt-2 p-2 bg-blue-50 border border-blue-200 rounded-md">
-                        <div className="flex items-start space-x-2">
-                          <div className="w-4 h-4 rounded-full bg-blue-500 flex items-center justify-center mt-0.5">
-                            <span className="text-white text-xs font-bold">i</span>
-                          </div>
-                          <div>
-                            <p className="text-xs font-medium text-blue-800">Intelligent Auto-Selection</p>
-                            <p className="text-xs text-blue-600">
-                              The system will automatically choose the optimal encoding method for each column based on:
-                            </p>
-                            <ul className="text-xs text-blue-600 mt-1 ml-2 space-y-0.5">
-                              <li>• <strong>One-hot:</strong> Low cardinality (&lt;5 unique values)</li>
-                              <li>• <strong>Label:</strong> High cardinality (&gt;20 unique values) or ordinal data</li>
-                              <li>• <strong>Medium cardinality:</strong> Analyzed for ordinal patterns</li>
-                            </ul>
-                          </div>
-                        </div>
-                      </div>
-                    )}
-                  </div>
+            <h3 className="text-base font-semibold mb-4 flex items-center">
+              <span className="bg-blue-100 text-blue-700 rounded-full w-6 h-6 inline-flex items-center justify-center mr-2 text-xs">1</span>
+              Apply to Columns
+            </h3>
+            {/* Column search and bulk controls */}
+            <div className="relative mb-3">
+              <Input
+                placeholder="Search columns..."
+                value={columnFilter}
+                onChange={e => setColumnFilter(e.target.value)}
+                className="pl-8"
+              />
+              <div className="absolute left-2.5 top-2.5 text-gray-400">
+                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <circle cx="11" cy="11" r="8"></circle>
+                  <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+                </svg>
+              </div>
+            </div>
+            
+            <div className="flex space-x-2 mb-4">
+              <Button 
+                size="sm" 
+                variant="outline"
+                className="border-blue-200 text-blue-600 hover:bg-blue-50"
+                onClick={() => setSelectedColumns(filteredColumns)}
+              >
+                Select All
+              </Button>
+              <Button 
+                size="sm" 
+                variant="outline"
+                className="border-gray-200 text-gray-600 hover:bg-gray-50"
+                onClick={() => setSelectedColumns([])}
+              >
+                Clear All
+              </Button>
+            </div>
+            
+            <div className="space-y-3 max-h-[300px] overflow-y-auto border rounded-md p-2">
+              {filteredColumns.length === 0 ? (
+                <p className="text-sm text-gray-500 p-2 text-center">No columns match your search criteria</p>
+              ) : (
+                filteredColumns.map((column: string) => {
+                  // Check if column looks like a channel (ch1, channel2, etc.)
+                  const isLikelyChannel = /^(ch|channel)[_\s]?(\d+)$/i.test(column) ||
+                                          /sensor/i.test(column) || 
+                                          /signal/i.test(column);
                   
-                  {encodingMethods.length === 0 && (
-                    <p className="text-xs text-orange-600 mt-2">Please select at least one encoding method.</p>
-                  )}
-                </div>
-              )}
-
-              {/* Custom Methods Section */}
-              {customMethods.length > 0 && (
-                <>
-                  <hr className="my-3" />
-                  <h4 className="font-medium text-sm mb-2">Custom Preprocessing Methods</h4>                    {customMethods.map((method) => (                    <div key={method.filename} className="mb-4">                      <Label className="flex items-center space-x-2">                        <Checkbox
-                          checked={selectedCustomMethods.includes(method.filename)}                          onCheckedChange={(checked) => {
-                            setSelectedCustomMethods(prev => {
-                              const newState = checked
-                                ? prev.includes(method.filename) ? prev : [...prev, method.filename]
-                                : prev.filter(m => m !== method.filename);
-                              
-                              // Initialize parameters for newly selected methods
-                              if (checked && !prev.includes(method.filename)) {
-                                console.log(`Initializing parameters for ${method.filename}`);
-                              }
-                              
-                              return newState;
-                            });
-                          }}
-                        />
-                        <div>
-                          <span className="font-medium">{method.name}</span>
-                          {method.description && (
-                            <p className="text-xs text-muted-foreground">{method.description}</p>
-                          )}
-                        </div>
-                      </Label>
-                        {/* Show parameters UI when this method is selected */}
-                      {selectedCustomMethods.includes(method.filename) && (
-                        <CustomMethodParams
-                          methodName={method.name}
-                          filename={method.filename}
-                          onParamsChange={(params) => {
-                            setCustomMethodParams(prev => ({
-                              ...prev,
-                              [method.filename]: params,
-                            }));
-                          }}
-                        />
-                      )}
-                    </div>
-                  ))}
-                </>
-              )}
-              {customMethods.length === 0 && (
-                <p className="text-xs text-gray-500 mt-3">No custom preprocessing methods available</p>
+                  return (
+                    <Label 
+                      key={column} 
+                      className={`flex items-center space-x-2 p-1.5 rounded-md ${
+                        selectedColumns.includes(column) ? 'bg-blue-50' : 'hover:bg-gray-50'
+                      }`}
+                    >
+                      <Checkbox
+                        checked={selectedColumns.includes(column)}
+                        onCheckedChange={(checked: boolean) => {
+                          if (checked) {
+                            setSelectedColumns(prev => prev.includes(column) ? prev : [...prev, column]);
+                          } else {
+                            setSelectedColumns(prev => prev.filter(c => c !== column));
+                          }
+                        }}
+                        className={isLikelyChannel ? "text-blue-600" : ""}
+                      />
+                      <div className="flex items-center">
+                        <span className={`${isLikelyChannel ? "font-medium text-blue-600" : ""}`}>
+                          {column}
+                        </span>
+                        {isLikelyChannel && (
+                          <span className="ml-2 text-xs bg-blue-100 text-blue-800 rounded-full px-2 py-0.5">channel</span>
+                        )}
+                      </div>
+                    </Label>
+                  );
+                })
               )}
             </div>
+            
+            {selectedColumns.length > 0 && (
+              <div className="mt-3 text-sm text-gray-500">
+                Selected {selectedColumns.length} of {filteredColumns.length} columns
+              </div>
+            )}
           </CardContent>
         </Card>
 
-        <Card>
+        {/* Preprocessing Operations & Custom Methods */}
+        <Card className="hover:shadow-sm transition-shadow duration-200">
           <CardContent className="pt-6">
-            <h3 className="text-sm font-medium mb-4">Apply to Columns</h3>
-            <div className="space-y-3 max-h-[200px] overflow-y-auto">
-              {columns.map((column: string) => (
-                <Label key={column} className="flex items-center space-x-2">
-                  <Checkbox
-                    checked={selectedColumns.includes(column)}
-                    onCheckedChange={() => handleColumnToggle(column)}
-                  />
-                  <span>{column}</span>
-                </Label>
-              ))}
+            <h3 className="text-base font-semibold mb-4 flex items-center">
+              <span className="bg-purple-100 text-purple-700 rounded-full w-6 h-6 inline-flex items-center justify-center mr-2 text-xs">2</span>
+              Preprocessing Operations
+            </h3>
+            <div className="space-y-4">
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                <div className="border rounded-md p-3 hover:bg-gray-50 transition-colors duration-150">
+                  <Label className="flex items-center space-x-2 mb-2">
+                    <Checkbox
+                      checked={selectedOperations.includes("missing")}
+                      onCheckedChange={() => handleOperationToggle("missing")}
+                      className="text-purple-600"
+                    />
+                    <span className="font-medium text-gray-800">Handle Missing Values</span>
+                  </Label>
+                  
+                  {selectedOperations.includes("missing") && (
+                    <div className="pl-6 mt-2">
+                      <Select value={missingValues} onValueChange={setMissingValues}>
+                        <SelectTrigger className="w-full bg-white border-gray-200">
+                          <SelectValue placeholder="Select method" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="mean">Mean</SelectItem>
+                          <SelectItem value="median">Median</SelectItem>
+                          <SelectItem value="mode">Mode</SelectItem>
+                          <SelectItem value="zero">Replace with Zero</SelectItem>
+                          <SelectItem value="drop">Drop Rows</SelectItem>
+                        </SelectContent>
+                      </Select>
+                      <p className="text-xs text-gray-500 mt-1">How to handle missing data points</p>
+                    </div>
+                  )}
+                </div>
+
+                <div className="border rounded-md p-3 hover:bg-gray-50 transition-colors duration-150">
+                  <Label className="flex items-center space-x-2 mb-2">
+                    <Checkbox
+                      checked={selectedOperations.includes("normalize")}
+                      onCheckedChange={() => handleOperationToggle("normalize")}
+                      className="text-purple-600"
+                    />
+                    <span className="font-medium text-gray-800">Normalize Data</span>
+                  </Label>
+                  <p className="text-xs text-gray-500 pl-6">Scale data using min-max normalization</p>
+                </div>
+
+                <div className="border rounded-md p-3 hover:bg-gray-50 transition-colors duration-150">
+                  <Label className="flex items-center space-x-2 mb-2">
+                    <Checkbox
+                      checked={selectedOperations.includes("outliers")}
+                      onCheckedChange={() => handleOperationToggle("outliers")}
+                      className="text-purple-600"
+                    />
+                    <span className="font-medium text-gray-800">Remove Outliers</span>
+                  </Label>
+                  <p className="text-xs text-gray-500 pl-6">Identify and remove data points that deviate significantly</p>
+                </div>
+
+                <div className="border rounded-md p-3 hover:bg-gray-50 transition-colors duration-150">
+                  <Label className="flex items-center space-x-2 mb-2">
+                    <Checkbox
+                      checked={selectedOperations.includes("encode")}
+                      onCheckedChange={() => handleOperationToggle("encode")}
+                      className="text-purple-600"
+                    />
+                    <span className="font-medium text-gray-800">Encode Categorical Variables</span>
+                  </Label>
+                  <p className="text-xs text-gray-500 pl-6">Convert categorical data to numerical format</p>
+                </div>
+
+                {selectedOperations.includes("encode") && (
+                  <div className="col-span-full pl-6 mt-2">
+                    <p className="text-sm text-gray-500 mb-2">Encoding Methods (select one or both):</p>
+                    <div className="space-y-2">
+                      <Label className="flex items-center space-x-2">
+                        <Checkbox
+                          checked={encodingMethods.includes("onehot")}
+                          onCheckedChange={() => handleEncodingMethodToggle("onehot")}
+                          className="text-purple-600"
+                        />
+                        <div>
+                          <span className="font-medium">One-Hot Encoding Only</span>
+                          <p className="text-xs text-muted-foreground">Apply one-hot encoding to all categorical columns.</p>
+                        </div>
+                      </Label>
+                      <Label className="flex items-center space-x-2">
+                        <Checkbox
+                          checked={encodingMethods.includes("label")}
+                          onCheckedChange={() => handleEncodingMethodToggle("label")}
+                          className="text-purple-600"
+                        />
+                        <div>
+                          <span className="font-medium">Label Encoding Only</span>
+                          <p className="text-xs text-muted-foreground">Apply label encoding to all categorical columns.</p>
+                        </div>
+                      </Label>
+                      
+                      {encodingMethods.length === 2 && (
+                        <div className="mt-2 p-2 bg-blue-50 border border-blue-200 rounded-md">
+                          <div className="flex items-start space-x-2">
+                            <div className="w-4 h-4 rounded-full bg-blue-500 flex items-center justify-center mt-0.5">
+                              <span className="text-white text-xs font-bold">i</span>
+                            </div>
+                            <div>
+                              <p className="text-xs font-medium text-blue-800">Intelligent Auto-Selection</p>
+                              <p className="text-xs text-blue-600">
+                                The system will automatically choose the optimal encoding method for each column based on:
+                              </p>
+                              <ul className="text-xs text-blue-600 mt-1 ml-2 space-y-0.5">
+                                <li>• <strong>One-hot:</strong> Low cardinality (&lt;5 unique values)</li>
+                                <li>• <strong>Label:</strong> High cardinality (&gt;20 unique values) or ordinal data</li>
+                                <li>• <strong>Medium cardinality:</strong> Analyzed for ordinal patterns</li>
+                              </ul>
+                            </div>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                    
+                    {encodingMethods.length === 0 && (
+                      <p className="text-xs text-orange-600 mt-2">Please select at least one encoding method.</p>
+                    )}
+                  </div>
+                )}
+
+                {/* Custom Methods Section */}
+                {customMethods.length > 0 && (
+                  <>
+                    <div className="col-span-full">
+                      <hr className="my-3" />
+                      <h4 className="font-medium text-sm mb-2">Custom Preprocessing Methods</h4>
+                      {customMethods.map((method) => (
+                        <div key={method.filename} className="mb-4">
+                          <Label className="flex items-center space-x-2">
+                            <Checkbox
+                              checked={selectedCustomMethods.includes(method.filename)}
+                              onCheckedChange={(checked) => {
+                                setSelectedCustomMethods(prev => {
+                                  const newState = checked
+                                    ? prev.includes(method.filename) ? prev : [...prev, method.filename]
+                                    : prev.filter(m => m !== method.filename);
+                                  
+                                  // Initialize parameters for newly selected methods
+                                  if (checked && !prev.includes(method.filename)) {
+                                    console.log(`Initializing parameters for ${method.filename}`);
+                                  }
+                                  
+                                  return newState;
+                                });
+                              }}
+                            />
+                            <div>
+                              <span className="font-medium">{method.name}</span>
+                              {method.description && (
+                                <p className="text-xs text-muted-foreground">{method.description}</p>
+                              )}
+                            </div>
+                          </Label>
+                          {/* Show parameters UI when this method is selected */}
+                          {selectedCustomMethods.includes(method.filename) && (
+                            <CustomMethodParams
+                              methodName={method.name}
+                              filename={method.filename}
+                              onParamsChange={(params) => {
+                                setCustomMethodParams(prev => ({
+                                  ...prev,
+                                  [method.filename]: params,
+                                }));
+                              }}
+                            />
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </>
+                )}
+                {customMethods.length === 0 && (
+                  <div className="col-span-full">
+                    <p className="text-xs text-gray-500 mt-3">No custom preprocessing methods available</p>
+                  </div>
+                )}
+              </div>
             </div>
           </CardContent>
         </Card>
       </div>
 
       {/* Encoding Preview Section */}
-      {processedData && selectedOperations.includes("encode") && renderEncodingPreview()}      <div className="flex justify-end gap-2">
-        <Button onClick={handleRun} disabled={runDisabled}>
-          {isLoading ? "Processing..." : "Run"}
-        </Button>
-        <Button onClick={handleSubmit} disabled={isLoading}>
-          Continue
-        </Button>
-      </div>
+      {processedData && selectedOperations.includes("encode") && renderEncodingPreview()}
+
+      {/* Time Series Comparison Section */}
+      {(Object.keys(beforeSeriesImages).length > 0 || Object.keys(afterSeriesImages).length > 0) && (
+        <Card className="mt-4 hover:shadow-md transition-shadow duration-300 border-blue-100">
+          <CardContent className="pt-6">
+            <h3 className="text-lg font-semibold mb-4 text-blue-800 flex items-center border-b pb-3">
+              <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="mr-2">
+                <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline>
+              </svg>
+              Time Series Comparison
+            </h3>
+            
+            {selectedColumns.length > 0 && (
+              <div className="mb-4 p-4 bg-blue-50 rounded-md border border-blue-100 shadow-sm">
+                <div className="flex items-start space-x-3">
+                  <div className="text-blue-600 mt-0.5 bg-blue-100 p-1 rounded-full">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <circle cx="12" cy="12" r="10"></circle>
+                      <line x1="12" y1="8" x2="12" y2="12"></line>
+                      <line x1="12" y1="16" x2="12.01" y2="16"></line>
+                    </svg>
+                  </div>
+                  <div className="flex-1">
+                    <p className="text-sm text-blue-800 font-medium mb-2">
+                      Selected channels for visualization:
+                    </p>
+                    <div className="flex flex-wrap gap-1.5 mt-1">
+                      {selectedColumns.map(col => (
+                        <span key={col} className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800 border border-blue-200">
+                          {col}
+                        </span>
+                      ))}
+                    </div>
+                    {Object.keys(beforeSeriesImages).length === 0 && selectedColumns.includes('ch1') && (
+                      <div className="mt-3 p-2.5 bg-amber-50 rounded-md border border-amber-200">
+                        <p className="text-xs text-amber-800 flex items-center">
+                          <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="mr-1.5">
+                            <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path>
+                            <line x1="12" y1="9" x2="12" y2="13"></line>
+                            <line x1="12" y1="17" x2="12.01" y2="17"></line>
+                          </svg>
+                          <strong>Note:</strong> Some channels might not appear in the "Before" plot if they aren't present in the raw data or have a different naming format.
+                        </p>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Before Preprocessing section */}
+            <div className="mb-6">
+              <h4 className="text-sm font-semibold mb-3 border-b pb-2 flex items-center text-gray-800">
+                Before Preprocessing
+                <span className="ml-auto text-xs text-gray-500 bg-gray-100 px-2 py-1 rounded-full">Raw Data</span>
+              </h4>
+              {Object.keys(beforeSeriesImages).length > 0 ? (
+                // Filter to only show selected channels
+                Object.entries(beforeSeriesImages)
+                  .filter(([ch]) => selectedColumns.some(selected => 
+                    ch.toLowerCase() === selected.toLowerCase() || 
+                    ch.toLowerCase().includes(selected.toLowerCase()) ||
+                    selected.toLowerCase().includes(ch.toLowerCase())
+                  ))
+                  .map(([ch, img]) => (
+                    <div key={ch} className="mb-4 border rounded-lg overflow-hidden bg-white shadow-sm">
+                      <div className="bg-gray-100 px-3 py-1.5 border-b flex items-center">
+                        <p className="text-sm font-medium text-gray-700">
+                          {/* Show channel name, not data value */}
+                          {selectedColumns.find(selected => 
+                            ch.toLowerCase() === selected.toLowerCase() || 
+                            ch.toLowerCase().includes(selected.toLowerCase()) ||
+                            selected.toLowerCase().includes(ch.toLowerCase())
+                          ) || ch}
+                        </p>
+                        <span className="ml-auto text-xs text-gray-500 bg-white px-2 py-0.5 rounded-full border border-gray-200">Original Signal</span>
+                      </div>
+                      <div className="p-2">
+                        <img 
+                          src={`data:image/png;base64,${img}`} 
+                          alt={`Before ${ch}`}
+                          className="w-full h-auto"
+                        />
+                      </div>
+                    </div>
+                  ))
+              ) : (
+                <div className="p-6 bg-white rounded-lg border text-center">
+                  <div className="text-gray-400 mb-3">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className="mx-auto">
+                      <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline>
+                    </svg>
+                  </div>
+                  <p className="text-sm text-gray-600 mb-2">No "Before" plots available</p>
+                  <p className="text-xs text-gray-500">Select channels and run preprocessing to generate plots</p>
+                  
+                  {selectedColumns.includes('ch1') && (
+                    <div className="mt-4 p-3 bg-amber-50 rounded-lg border border-amber-200 text-left">
+                      <div className="flex items-start">
+                        <div className="text-amber-500 mt-0.5 mr-2 bg-amber-100 p-1 rounded-full">
+                          <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                            <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path>
+                            <line x1="12" y1="9" x2="12" y2="13"></line>
+                            <line x1="12" y1="17" x2="12.01" y2="17"></line>
+                          </svg>
+                        </div>
+                        <div>
+                          <p className="text-sm font-medium text-amber-800 mb-1">
+                            "Before" plot for channel "ch1" might be missing because:
+                          </p>
+                          <ul className="text-xs text-amber-700 list-disc pl-4 space-y-1">
+                            <li>The channel name in raw data might differ from selection</li>
+                            <li>The data might need additional preprocessing to display properly</li>
+                            <li>Channel naming format might vary (e.g., "ch1" vs "Channel1")</li>
+                          </ul>
+                          <p className="text-xs text-amber-600 mt-2 italic">Try running with custom methods to improve channel matching</p>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+            
+            {/* After Preprocessing */}
+            <div className="border rounded-lg p-4 bg-gray-50 shadow-sm transition-shadow hover:shadow-md">
+              <h4 className="text-sm font-semibold mb-3 border-b pb-2 flex items-center text-green-800">
+                <span className="bg-green-100 text-green-700 rounded-full w-6 h-6 inline-flex items-center justify-center mr-2 text-xs">
+                  <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/>
+                  </svg>
+                </span>
+                After Preprocessing
+                <span className="ml-auto text-xs text-green-600 bg-green-50 px-2 py-1 rounded-full border border-green-100">Processed Data</span>
+              </h4>
+              {Object.keys(afterSeriesImages).length > 0 ? (
+                // Display selected channels or all if no match
+                (() => {
+                  const allEntries = Object.entries(afterSeriesImages);
+                  const filteredEntries = allEntries.filter(([ch]) =>
+                    selectedColumns.some(selected =>
+                      ch.toLowerCase() === selected.toLowerCase() ||
+                      ch.toLowerCase().includes(selected.toLowerCase()) ||
+                      selected.toLowerCase().includes(ch.toLowerCase())
+                    )
+                  );
+                  const entriesToShow = filteredEntries.length > 0 ? filteredEntries : allEntries;
+                  return entriesToShow.map(([ch, img]) => (
+                    <div key={ch} className="mb-4 border rounded-lg overflow-hidden bg-white shadow-sm">
+                      <div className="bg-green-50 px-3 py-1.5 border-b flex items-center">
+                        <p className="text-sm font-medium text-gray-700">
+                          {/* Show channel name, not data value */}
+                          {selectedColumns.find(selected => 
+                            ch.toLowerCase() === selected.toLowerCase() || 
+                            ch.toLowerCase().includes(selected.toLowerCase()) ||
+                            selected.toLowerCase().includes(ch.toLowerCase())
+                          ) || ch}
+                        </p>
+                        <span className="ml-auto text-xs text-green-600 bg-white px-2 py-0.5 rounded-full border border-green-100">Processed Signal</span>
+                      </div>
+                      <div className="p-2">
+                        <img 
+                          src={`data:image/png;base64,${img}`} 
+                          alt={`After ${ch}`}
+                          className="w-full h-auto"
+                        />
+                      </div>
+                    </div>
+                  ));
+                })()
+              ) : (
+                <div className="p-6 bg-white rounded-lg border text-center">
+                  <div className="text-gray-400 mb-3">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className="mx-auto">
+                      <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline>
+                    </svg>
+                  </div>
+                  <p className="text-sm text-gray-600 mb-2">No "After" plots available</p>
+                  <p className="text-xs text-gray-500 mb-3">Run preprocessing to generate plots</p>
+                  
+                  <Button 
+                    size="sm" 
+                    variant="outline" 
+                    className="text-xs border-green-200 text-green-600 hover:bg-green-50"
+                    onClick={handleRun}
+                    disabled={isLoading}
+                  >
+                    {isLoading ? (
+                      <>
+                        <svg className="animate-spin -ml-1 mr-2 h-4 w-4 text-green-600" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                        </svg>
+                        Processing...
+                      </>
+                    ) : (
+                      <>
+                        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="mr-1">
+                          <polygon points="5 3 19 12 5 21 5 3"></polygon>
+                        </svg>
+                        Run Preprocessing
+                      </>
+                    )}
+                  </Button>
+                </div>
+              )}
+            </div>
+          </CardContent>
+        </Card>
+      )}
+      {/* Continue button row */}
+      <div className="flex justify-end gap-3 mt-6">
+        <Button 
+          onClick={handleRun} 
+          disabled={runDisabled}
+          className={`${!runDisabled ? 'bg-purple-600 hover:bg-purple-700' : ''} min-w-[100px]`}
+        >
+          {isLoading ? (
+             <div className="flex items-center">
+               <svg className="animate-spin -ml-1 mr-2 h-4 w-4 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                 <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                 <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+               </svg>
+               Processing...
+             </div>
+           ) : (
+             <div className="flex items-center">
+               <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="mr-2">
+                 <polygon points="5 3 19 12 5 21 5 3"></polygon>
+               </svg>
+               Run Preprocessing
+             </div>
+           )}
+         </Button>
+         <Button 
+           onClick={handleSubmit} 
+           disabled={isLoading || !processedData}
+           className={`${processedData ? 'bg-blue-600 hover:bg-blue-700' : ''} min-w-[100px]`}
+         >
+           <div className="flex items-center">
+             <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="mr-2">
+               <line x1="5" y1="12" x2="19" y2="12"></line>
+               <polyline points="12 5 19 12 12 19"></polyline>
+             </svg>
+             Continue
+           </div>
+         </Button>
+       </div>
     </div>
   )
+}
+
+// Helper to filter rows to only selected columns
+const filterRowsByColumns = (rows: any[], cols: string[]) => {
+  if (!rows || rows.length === 0) return [];
+  if (!cols || cols.length === 0) return rows;
+  
+  console.log(`Filtering rows to include only these columns: ${cols.join(', ')}`);
+  
+  return rows.map(row => {
+    const obj: any = {};
+    cols.forEach(col => { 
+      if (row && typeof row === 'object' && col in row) {
+        obj[col] = row[col];
+      }
+    });
+    return obj;
+  });
+};
+
+/**
+ * Fetches time series plots for the given data rows
+ * @param rows The data rows to plot
+ * @param selectedChannels Optional array of channel names to filter the plots by.
+ *                          If provided, only plots for these channels will be generated.
+ * @param selectedChannels Optional array of channel names to filter the plots by.
+ *                          If provided, only plots for these channels will be generated.
+ * @returns Object containing base64 images for each channel
+ */
+async function fetchTimeseries(rows: any[], selectedChannels?: string[]) {
+  if (rows.length === 0) {
+    console.warn("No rows provided to fetchTimeseries");
+    return { images: {} };
+  }
+
+  try {
+    // Get only the columns that are present in the data
+    const availableChannels = rows.length > 0 ? Object.keys(rows[0]) : [];
+    if (availableChannels.length === 0) {
+      console.warn("No channels found in the rows");
+      return { images: {} };
+    }
+    
+    // Ensure data is numerical for the API (convert strings to numbers)
+    const processedRows = rows.map(row => {
+      const processedRow: any = {};
+      Object.entries(row).forEach(([key, value]) => {
+        // Convert string numeric values to actual numbers
+        if (typeof value === 'string' && !isNaN(Number(value))) {
+          processedRow[key] = Number(value);
+        } else {
+          processedRow[key] = value;
+        }
+      });
+      return processedRow;
+    });      // Filter channels based on user selection if provided
+    let channelsToUse = availableChannels;
+    if (selectedChannels && selectedChannels.length > 0) {
+      console.log("Selected channels from user input:", selectedChannels);
+      console.log("Available channels in data:", availableChannels);
+      
+      // First try exact matches (case-insensitive)
+      let exactMatches = availableChannels.filter(channel => 
+        selectedChannels.some(selected => 
+          channel.toLowerCase() === selected.toLowerCase()
+        )
+      );
+      
+      // If no exact matches, try more precise pattern matching for channel numbers
+      if (exactMatches.length === 0) {
+        console.log("No exact channel matches found, trying pattern matching for channel numbers");
+        
+        // Extract channel numbers from selected channels (e.g., "ch1" -> "1")
+        const selectedChannelNumbers = selectedChannels
+          .map(ch => {
+            const match = ch.match(/ch(\d+)/i);
+            return match ? match[1] : null;
+          })
+          .filter(Boolean);
+        
+        console.log("Extracted channel numbers:", selectedChannelNumbers);
+        
+        if (selectedChannelNumbers.length > 0) {
+          // Match available channels by their numeric part
+          const numberMatches = availableChannels.filter(channel => {
+            const channelMatch = channel.match(/ch(\d+)/i);
+            if (!channelMatch) return false;
+            
+            return selectedChannelNumbers.includes(channelMatch[1]);
+          });
+          
+          if (numberMatches.length > 0) {
+            console.log("Found channel number matches:", numberMatches);
+            channelsToUse = numberMatches;
+          } else {
+            // Fall back to partial matches if no number matches found
+            console.log("No number matches found, trying partial matches");
+            let partialMatches = availableChannels.filter(channel => 
+              selectedChannels.some(selected => 
+                channel.toLowerCase().includes(selected.toLowerCase()) || 
+                selected.toLowerCase().includes(channel.toLowerCase())
+              )
+            );
+            if (partialMatches.length > 0) {
+              console.log("Found partial channel matches:", partialMatches);
+              channelsToUse = partialMatches;
+            } else {
+              console.warn("No channel matches found, falling back to available channels");
+              channelsToUse = availableChannels.slice(0, Math.min(5, availableChannels.length));
+            }
+          }
+        } else {
+          // If no channel numbers found, try partial matches
+          console.log("No channel numbers extracted, trying partial matches");
+          let partialMatches = availableChannels.filter(channel => 
+            selectedChannels.some(selected => 
+              channel.toLowerCase().includes(selected.toLowerCase()) ||
+              selected.toLowerCase().includes(channel.toLowerCase())
+            )
+          );
+          
+          if (partialMatches.length > 0) {
+            console.log("Found partial channel matches:", partialMatches);
+            channelsToUse = partialMatches;
+          } else {
+            console.warn("No channel matches found, falling back to available channels");
+            channelsToUse = availableChannels.slice(0, Math.min(5, availableChannels.length));
+          }
+        }
+      } else {
+        console.log("Found exact channel matches:", exactMatches);
+        channelsToUse = exactMatches;
+      }
+    }    // Create a channel mapping for proper display names
+    const channelMapping: Record<string, string> = {};
+    if (selectedChannels && selectedChannels.length > 0) {
+      channelsToUse.forEach(channel => {
+        // First try to match by exact number if it's a channel with a numeric identifier
+        const channelMatch = channel.match(/ch(\d+)/i);
+        if (channelMatch) {
+          const channelNum = channelMatch[1];
+          // Look for a selected channel with the same number
+          const matchByNumber = selectedChannels.find(selected => {
+            const selectedMatch = selected.match(/ch(\d+)/i);
+            return selectedMatch?.[1] === channelNum;
+          });
+          
+          if (matchByNumber) {
+            channelMapping[channel] = matchByNumber;
+            console.log(`Mapped channel ${channel} to ${matchByNumber} by number match`);
+            return;
+          }
+        }
+        
+        // If no number match, fall back to other matching strategies
+        const matchingSelected = selectedChannels.find(selected => 
+          channel.toLowerCase() === selected.toLowerCase() ||
+          channel.toLowerCase().includes(selected.toLowerCase()) ||
+          selected.toLowerCase().includes(channel.toLowerCase())
+        );
+        
+        if (matchingSelected) {
+          channelMapping[channel] = matchingSelected;
+          console.log(`Mapped channel ${channel} to ${matchingSelected} by string match`);
+        }
+      });
+    }
+    
+    console.log(`Fetching timeseries for ${channelsToUse.length}/${availableChannels.length} channels, ${rows.length} rows`);
+    console.log("Selected channels for plot:", channelsToUse);
+    console.log("Sample row after processing:", processedRows[0]);
+    
+       
+    // Only include the filtered channels in the payload
+    const payload = { 
+      data: processedRows, 
+      channels: channelsToUse, // Only use filtered channels
+      channelMapping: channelMapping // Add channel mapping for proper display
+    };
+    
+    const res = await fetch("http://localhost:8003/Timeseries", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+      if (!res.ok) {
+      const errorText = await res.text().catch(() => "Unknown error");
+      console.error(`HTTP error! status: ${res.status}, message: ${errorText}`);
+      throw new Error(`HTTP error! status: ${res.status}`);
+    }
+      const result = await res.json();
+    console.log("Timeseries API response received with images for channels:", Object.keys(result.images || {}));
+    
+    // Verify that the returned images match the expected channels
+    if (result.images && Object.keys(result.images).length > 0) {
+      const returnedChannels = Object.keys(result.images);
+      const expectedChannels = channelsToUse;
+      
+      // Filter the images to only include the selected channels
+      if (selectedChannels && selectedChannels.length > 0) {
+        const filteredImages: Record<string, string> = {};          // Try to match returned channels with selected channels
+        returnedChannels.forEach(returnedCh => {
+          // Extract channel numbers for more precise matching
+          const returnedMatch = returnedCh.match(/ch(\d+)/i);
+          const returnedNum = returnedMatch ? returnedMatch[1] : null;
+          
+          // Find the matching selected channel (if any)
+          const matchingSelected = selectedChannels.find(selectedCh => {
+            // Try to match by channel number first (more precise)
+            if (returnedNum) {
+              const selectedMatch = selectedCh.match(/ch(\d+)/i);
+              if (selectedMatch?.[1] === returnedNum) {
+                return true;
+              }
+            }
+            
+            // Fall back to string matching
+            return returnedCh.toLowerCase() === selectedCh.toLowerCase() ||
+                   returnedCh.toLowerCase().includes(selectedCh.toLowerCase()) ||
+                   selectedCh.toLowerCase().includes(returnedCh.toLowerCase());
+          });
+          
+          if (matchingSelected) {
+            // Use the returnedCh as the key but we'll display the selected channel name in the UI
+            filteredImages[returnedCh] = result.images[returnedCh];
+            console.log(`Matched returned channel ${returnedCh} with selected channel ${matchingSelected}`);
+          }
+        });          // Handle missing selected channels more generically
+        selectedChannels?.forEach(selectedCh => {
+          // Check if this selected channel is already matched
+          const alreadyMatched = Object.keys(filteredImages).some(key => {
+            // Check by number if it's a channel with numeric identifier
+            const keyMatch = key.match(/ch(\d+)/i);
+            const selectedMatch = selectedCh.match(/ch(\d+)/i);
+            
+            if (keyMatch && selectedMatch && keyMatch[1] === selectedMatch[1]) {
+              return true;
+            }
+            
+            // Otherwise check by string matching
+            return key.toLowerCase() === selectedCh.toLowerCase() || 
+                   key.toLowerCase().includes(selectedCh.toLowerCase()) ||
+                   selectedCh.toLowerCase().includes(key.toLowerCase());
+          });
+          
+          if (!alreadyMatched) {
+            console.log(`Finding alternative match for selected channel: ${selectedCh}`);
+            
+            // Extract the channel number if possible
+            const selectedMatch = selectedCh.match(/ch(\d+)/i);
+            const selectedNum = selectedMatch ? selectedMatch[1] : null;
+            
+            // First try to find a match by channel number
+            if (selectedNum) {
+              const numberMatch = returnedChannels.find(ch => {
+                const chMatch = ch.match(/ch(\d+)/i);
+                return chMatch && chMatch[1] === selectedNum;
+              });
+              
+              if (numberMatch && numberMatch in result.images) {
+                console.log(`Using "${numberMatch}" as a number match for "${selectedCh}"`);
+                filteredImages[selectedCh] = result.images[numberMatch];
+                return;
+              }
+            }
+            
+            // If no number match, try other matching strategies
+            const potentialMatch = returnedChannels.find(ch => 
+              ch.toLowerCase().includes(selectedCh.toLowerCase().slice(0, 2)) || // Match first part of name
+              selectedCh.toLowerCase().includes(ch.toLowerCase().slice(0, 2)) || // Match first part 
+              // Look for numeric part matches (if channel includes numbers)
+              (selectedCh.match(/\d+/) && ch.includes(selectedCh.match(/\d+/)?.[0] || ''))
+            );
+            
+            if (potentialMatch && potentialMatch in result.images) {
+              console.log(`Using "${potentialMatch}" as a partial match for "${selectedCh}"`);
+              filteredImages[selectedCh] = result.images[potentialMatch];
+            }
+          }
+        });
+            // If we have filtered images, use them instead
+        if (Object.keys(filteredImages).length > 0) {
+          console.log("Filtered images to only include selected channels:", Object.keys(filteredImages));
+            // Rename keys to use selected channel names if available
+          if (Object.keys(channelMapping).length > 0) {
+            const remappedImages: Record<string, string> = {};
+            Object.keys(filteredImages).forEach(key => {
+              const mappedKey = channelMapping[key] || key;
+              remappedImages[mappedKey] = filteredImages[key];
+            });
+            
+            console.log("Remapped images to use selected channel names:", Object.keys(remappedImages));
+            return { images: remappedImages };
+          }
+          
+          return { images: filteredImages };
+        }
+      }
+    }
+    
+    // Fallback: return all images if no filtering was possible
+    return { images: result.images };
+  } catch (error) {
+    console.error("Error in fetchTimeseries:", error);
+    return { images: {} };
+  }
 }

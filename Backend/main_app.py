@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 import os
 import json
@@ -22,6 +22,10 @@ app.add_middleware(
 # Include the routers
 app.include_router(method_handler.router)
 
+# Mount vizreport endpoints
+from vizreport import app as viz_app
+app.mount("/viz", viz_app)
+
 # Define custom method directory
 CUSTOM_METHOD_DIR = "./custom_methods/"
 
@@ -33,8 +37,12 @@ os.makedirs(method_handler.CUSTOM_METHOD_DIR, exist_ok=True)
 # Note: We're not importing the app from preprocess.py as that would create a new FastAPI instance
 # Instead, we're copying the routes here
 @app.post("/preprocess")
-async def preprocess_endpoint(file=preprocess.File(...), config=preprocess.Form(...)):
-    return await preprocess.preprocess(file, config)
+async def preprocess_endpoint(request: Request):
+    """
+    Proxy endpoint for preprocessing JSON payload.
+    Forwards the entire request to the preprocess module.
+    """
+    return await preprocess.preprocess(request)
 
 # Add startup event to initialize
 @app.on_event("startup")

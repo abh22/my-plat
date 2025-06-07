@@ -1,0 +1,7 @@
+{
+  "name": "Autoregressive (AR) Features",
+  "filename": "ar_features.py",
+  "description": "Extract AR model coefficients as features from EMG signal segments.",
+  "category": "extraction",
+  "created": "2025-05-29T12:00:00.000Z"
+}
