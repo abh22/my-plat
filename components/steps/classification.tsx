@@ -32,10 +32,14 @@ interface CustomMethod {
 }
 
 export default function Classification({ data, onComplete }: { data: any; onComplete: (data: any) => void }) {
-  // Access selected features from feature evaluation step
+  // Selected feature names and their extracted feature vectors
   const selectedFeatures = data?.feature_evaluation?.selectedFeatures || [];
-  const originalData = data?.feature_evaluation?.originalData || [];
+  const featureVectors = data?.feature_evaluation?.extractedFeatures || [];
+
   const [model, setModel] = useState("kmeans");
+  // availableColumns refer to feature names
+  const availableColumns = featureVectors.length ? Object.keys(featureVectors[0]) : [];
+  const [targetColumn, setTargetColumn] = useState<string>(availableColumns[0] || "");
   const [activeTab, setActiveTab] = useState("models");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -43,71 +47,27 @@ export default function Classification({ data, onComplete }: { data: any; onComp
   const [classificationResult, setClassificationResult] = useState<any>(null);
   // Add custom methods state
   const [customMethods, setCustomMethods] = useState<CustomMethod[]>([]);
-  const [selectedCustomMethods, setSelectedCustomMethods] = useState<string[]>([]);  // Get all available columns from the original data  
-  const availableColumns = originalData && originalData.length > 0 
-    ? Object.keys(originalData[0] || {})
-    : [];
-    
-  // Fetch custom methods from the backend
+  const [selectedCustomMethods, setSelectedCustomMethods] = useState<string[]>([]);
+
+  // Fetch custom classification methods once
   useEffect(() => {
     const fetchCustomMethods = async () => {
       try {
-        console.log("Fetching custom classification methods...");
         const response = await fetch("http://localhost:8000/list-methods/");
-        if (!response.ok) {
-          console.error("Failed to fetch custom methods:", response.statusText);
-          return;
-        }
-        
-        const data = await response.json();
-        if (data.methods) {
-          // Filter methods by category (classification)
-          const classificationMethods = data.methods.filter(
-            (method: CustomMethod) => method.category === "classification" || method.category === ""
+        const json = await response.json();
+        if (json.methods) {
+          const classificationMethods = json.methods.filter(
+            (m: CustomMethod) => m.category === "classification"
           );
           setCustomMethods(classificationMethods);
-          console.log("Fetched custom classification methods:", classificationMethods);
-        } else {
-          console.log("No methods found in response:", data);
         }
       } catch (error) {
         console.error("Error fetching custom methods:", error);
       }
     };
-
     fetchCustomMethods();
   }, []);
     
-  // Fetch custom methods from the backend
-  useEffect(() => {
-    const fetchCustomMethods = async () => {
-      try {
-        console.log("Fetching custom classification methods...");
-        const response = await fetch("http://localhost:8000/list-methods/");
-        if (!response.ok) {
-          console.error("Failed to fetch custom methods:", response.statusText);
-          return;
-        }
-        
-        const data = await response.json();
-        if (data.methods) {
-          // Filter methods by category (classification)
-          const classificationMethods = data.methods.filter(
-            (method: CustomMethod) => method.category === "classification" || method.category === ""
-          );
-          setCustomMethods(classificationMethods);
-          console.log("Fetched custom classification methods:", classificationMethods);
-        } else {
-          console.log("No methods found in response:", data);
-        }
-      } catch (error) {
-        console.error("Error fetching custom methods:", error);
-      }
-    };
-
-    fetchCustomMethods();
-  }, []);
-  
   const handleRunClassification = async () => {
     if (selectedFeatures.length === 0) {
       setError("No features selected for clustering. Please go back to Feature Evaluation.");
@@ -119,22 +79,11 @@ export default function Classification({ data, onComplete }: { data: any; onComp
     setSuccess(null);
     
     try {
-      // Combine selected features with original data
-      const featureData = originalData.map((row: any) => {
-        const filteredRow: any = {};
-        // Include only selected features
-        selectedFeatures.forEach((col: string | number) => {
-          if (row.hasOwnProperty(col)) {
-            filteredRow[col] = row[col];
-          }
-        });
-        return filteredRow;
-      });
-      
+      // Use extracted feature vectors directly for clustering/classification
+      const featureData = featureVectors;
+
       // Prepare the payload for the clustering API
-      const payload = {
-        features: featureData,
-      };
+      const payload = { features: featureData };
       
       console.log("Running clustering with model:", model);
         // Determine if we're using a custom method
@@ -144,12 +93,7 @@ export default function Classification({ data, onComplete }: { data: any; onComp
       const formData = new FormData();
       formData.append("model_type", model);
       formData.append("features", new Blob([JSON.stringify(payload)], { type: "application/json" }));
-      formData.append("target", ""); // Empty target for unsupervised learning
-      
-      // Add flag to indicate if this is a custom method
-      if (isCustomMethod) {
-        formData.append("is_custom_method", "true");
-      }
+      if (isCustomMethod) formData.append("is_custom_method", "true");
       
       // Send request to the backend
       const response = await fetch("http://localhost:8004/classification", {
@@ -176,12 +120,7 @@ export default function Classification({ data, onComplete }: { data: any; onComp
     }
   };
   const handleSubmit = () => {
-    const clusteringData = {
-      model: model,
-      selectedFeatures: selectedFeatures,
-      results: classificationResult
-    }
-    console.log("Submitting clustering data:", clusteringData);
+    const clusteringData = { model, selectedFeatures, results: classificationResult };
     onComplete(clusteringData);
   }
 
@@ -244,97 +183,126 @@ export default function Classification({ data, onComplete }: { data: any; onComp
                     <RadioGroupItem value="hierarchical" id="radio_hierarchical" />
                     <Label htmlFor="radio_hierarchical" className="font-medium">Hierarchical Clustering</Label>
                   </div>
-
-                  {/* Custom Methods Section */}
-                  {customMethods.length > 0 && (
-                    <>
-                      <div className="my-4 border-t pt-4">
-                        <h4 className="font-semibold mb-3">Custom Classification Methods</h4>
-                        {customMethods.map((method) => (
-                          <div key={method.filename} className="flex items-center space-x-2 mb-2">
-                            <RadioGroupItem value={method.filename} id={`radio_${method.filename}`} />
-                            <div>
-                              <Label htmlFor={`radio_${method.filename}`} className="font-medium">{method.name}</Label>
-                              {method.description && (
-                                <p className="text-xs text-muted-foreground">{method.description}</p>
-                              )}
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    </>
+                  {/* Supervised Options */}
+                  <div className="mt-4 text-sm font-semibold">Supervised Classification</div>
+                  <div className="flex items-center space-x-2">
+                    <RadioGroupItem value="random_forest" id="radio_rf" />
+                    <Label htmlFor="radio_rf" className="font-medium">Random Forest</Label>
+                  </div>
+                  <div className="flex items-center space-x-2">
+                    <RadioGroupItem value="svm" id="radio_svm" />
+                    <Label htmlFor="radio_svm" className="font-medium">Support Vector Machine</Label>
+                  </div>
+                  <div className="flex items-center space-x-2">
+                    <RadioGroupItem value="logistic_regression" id="radio_logistic" />
+                    <Label htmlFor="radio_logistic" className="font-medium">Logistic Regression</Label>
+                  </div>
+                  {/* Target selection for supervised */}
+                  {['random_forest','svm','logistic_regression','logistic'].includes(model) && (
+                    <div className="mt-4">
+                      <Label className="text-sm font-medium">Select Target Column</Label>
+                      <Select value={targetColumn} onValueChange={setTargetColumn}>
+                        <SelectTrigger className="w-full mt-1">
+                          <SelectValue placeholder="Choose target" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {availableColumns.map(col => (
+                            <SelectItem key={col} value={col}>{col}</SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
                   )}
-                </div>
-              </RadioGroup>
-            </CardContent>
-          </Card>
-        </TabsContent>
+             {/* Custom Methods Section */}
+             {customMethods.length > 0 && (
+               <>
+                 <div className="my-4 border-t pt-4">
+                   <h4 className="font-semibold mb-3">Custom Classification Methods</h4>
+                   {customMethods.map((method) => (
+                     <div key={method.filename} className="flex items-center space-x-2 mb-2">
+                       <RadioGroupItem value={method.filename} id={`radio_${method.filename}`} />
+                       <div>
+                         <Label htmlFor={`radio_${method.filename}`} className="font-medium">{method.name}</Label>
+                         {method.description && (
+                           <p className="text-xs text-muted-foreground">{method.description}</p>
+                         )}
+                       </div>
+                     </div>
+                   ))}
+                 </div>
+               </>
+             )}
+           </div>
+         </RadioGroup>
+       </CardContent>
+     </Card>
+   </TabsContent>
 
-        {/* <TabsContent value="parameters" className="space-y-4">
-          <Card className="p-4">
-            <CardContent className="pt-6 space-y-4">
-              <div className="grid w-full items-center gap-3">
-                <Label htmlFor="targetColumn">Target Column (Class Label)</Label>
-                <Select
-                  value={targetColumn}
-                  onValueChange={(value) => setTargetColumn(value)}
-                >
-                  <SelectTrigger id="targetColumn" className="w-full">
-                    <SelectValue placeholder="Select target column" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {availableColumns.map((column) => (
-                      <SelectItem key={column} value={column}>
-                        {column}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-                <p className="text-xs text-muted-foreground">
-                  Select the column that contains the class labels you want to predict
-                </p>
-              </div>
-            </CardContent>
-          </Card>
-        </TabsContent> */}
-        
-        <TabsContent value="results" className="space-y-4">
-          {classificationResult && (
-            <div className="space-y-6">
-              {/* Metrics Overview */}
-              <Card className="p-4">
-                <h3 className="font-semibold mb-3">Clustering Results</h3>
-                <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
-                  <div className="bg-blue-50 p-3 rounded-lg border border-blue-100">
-                    <div className="text-sm text-muted-foreground">Number of Clusters</div>
-                    <div className="text-xl font-bold">{classificationResult.numClusters}</div>
-                  </div>
-                  <div className="bg-green-50 p-3 rounded-lg border border-green-100">
-                    <div className="text-sm text-muted-foreground">Silhouette Score</div>
-                    <div className="text-xl font-bold">
-                      {classificationResult.metrics?.silhouette !== null 
-                        ? classificationResult.metrics?.silhouette.toFixed(2) 
-                        : "N/A"}
-                    </div>
-                  </div>
-                  <div className="bg-purple-50 p-3 rounded-lg border border-purple-100">
-                    <div className="text-sm text-muted-foreground">Explained Variance</div>
-                    <div className="text-xl font-bold">
-                      {classificationResult.explainedVariance !== null 
-                        ? `${(classificationResult.explainedVariance * 100).toFixed(2)}%` 
-                        : "N/A"}
-                    </div>
-                  </div>
-                </div>
-              </Card>
-              
-              {/* Cluster Distribution Chart */}
-              {classificationResult.metrics?.cluster_distribution && (
-                <Card className="p-4">
-                  <h3 className="font-semibold mb-3">Cluster Distribution</h3>
-                  <div className="h-64">
-                    <ResponsiveContainer width="100%" height="100%">
-                      <BarChart
+   {/* <TabsContent value="parameters" className="space-y-4">
+     <Card className="p-4">
+       <CardContent className="pt-6 space-y-4">
+         <div className="grid w-full items-center gap-3">
+           <Label htmlFor="targetColumn">Target Column (Class Label)</Label>
+           <Select
+             value={targetColumn}
+             onValueChange={(value) => setTargetColumn(value)}
+           >
+             <SelectTrigger id="targetColumn" className="w-full">
+               <SelectValue placeholder="Select target column" />
+             </SelectTrigger>
+             <SelectContent>
+               {availableColumns.map((column) => (
+                 <SelectItem key={column} value={column}>
+                   {column}
+                 </SelectItem>
+               ))}
+             </SelectContent>
+           </Select>
+           <p className="text-xs text-muted-foreground">
+             Select the column that contains the class labels you want to predict
+           </p>
+         </div>
+       </CardContent>
+     </Card>
+   </TabsContent> */}
+   
+   <TabsContent value="results" className="space-y-4">
+     {classificationResult && (
+       <div className="space-y-6">
+         {/* Metrics Overview */}
+         <Card className="p-4">
+           <h3 className="font-semibold mb-3">Clustering Results</h3>
+           <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+             <div className="bg-blue-50 p-3 rounded-lg border border-blue-100">
+               <div className="text-sm text-muted-foreground">Number of Clusters</div>
+               <div className="text-xl font-bold">{classificationResult.numClusters}</div>
+             </div>
+             <div className="bg-green-50 p-3 rounded-lg border border-green-100">
+               <div className="text-sm text-muted-foreground">Silhouette Score</div>
+               <div className="text-xl font-bold">
+                 {classificationResult.metrics?.silhouette != null 
+                   ? classificationResult.metrics.silhouette.toFixed(2) 
+                   : "N/A"}
+               </div>
+             </div>
+             <div className="bg-purple-50 p-3 rounded-lg border border-purple-100">
+               <div className="text-sm text-muted-foreground">Explained Variance</div>
+               <div className="text-xl font-bold">
+                 {classificationResult.explainedVariance != null 
+                   ? `${(classificationResult.explainedVariance * 100).toFixed(2)}%` 
+                   : "N/A"}
+               </div>
+             </div>
+           </div>
+         </Card>
+         
+         {/* Cluster Distribution Chart */}
+         {classificationResult.metrics?.cluster_distribution && (
+           <Card className="p-4">
+             <h3 className="font-semibold mb-3">Cluster Distribution</h3>
+             <div className="h-64">
+               <ResponsiveContainer width="100%" height="100%">
+                 <BarChart
                                             data={Object.entries(classificationResult.metrics.cluster_distribution)
                                               .map(([name, value]) => ({ name, count: value }))}
                                           >

@@ -17,7 +17,8 @@ app.add_middleware(
 @app.post("/evaluation")
 async def evaluate_features(
     methods: str = Form(...),
-    features: UploadFile = Form(...)
+    features: UploadFile = Form(...),
+    weights: str = Form(None)
 ):
     try:
         # Parse methods
@@ -26,6 +27,18 @@ async def evaluate_features(
             print(f"Methods requested: {method_list}")
         except json.JSONDecodeError:
             return {"error": "Invalid JSON in methods parameter"}
+        # Parse optional weights JSON mapping method->weight
+        method_weights: Dict[str, float] = {m: 1.0 for m in method_list}
+        total_weight = float(len(method_list))
+        if weights:
+            try:
+                weight_map = json.loads(weights)
+                for m, w in weight_map.items():
+                    if m in method_weights:
+                        method_weights[m] = float(w)
+                total_weight = sum(method_weights.values()) or total_weight
+            except json.JSONDecodeError:
+                return {"error": "Invalid JSON in weights parameter"}
 
         # Parse feature data
         try:
@@ -74,6 +87,7 @@ async def evaluate_features(
         try:
             df = pd.DataFrame(feature_data)
             print(f"DataFrame columns: {df.columns.tolist()}")
+            print(f"DataFrame shape (rows, cols): {df.shape}")
         except Exception as e:
             return {"error": f"Failed to create DataFrame: {str(e)}"}
             
@@ -81,10 +95,8 @@ async def evaluate_features(
         if df.empty:
             return {"error": "DataFrame is empty after conversion"}
             
-        # Detect and exclude ID columns
-        id_columns = detect_id_columns(df)
-        df = df.drop(columns=id_columns, errors='ignore')
-        print(f"DataFrame columns after ID column removal: {df.columns.tolist()}")
+        # ID removal logic removed, keep columns as-is
+        print(f"DataFrame columns: {df.columns.tolist()}")
         
         # Identify numeric columns
         numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
@@ -92,53 +104,85 @@ async def evaluate_features(
         
         if not numeric_cols:
             return {"error": "No numeric columns found for evaluation"}
-            
+        # Initialize scores container
         scores: List[Dict[str, Any]] = []
+        # Collect and normalize per-method scores to prevent scale dominance
         
         # Evaluate features using selected methods
         if "variance" in method_list:
-            print("Calculating variance...")
-            var = df[numeric_cols].var()
-            for name, score in var.items():
+            print("Calculating variance (population, ddof=0) ...")
+            var = df[numeric_cols].var(ddof=0)
+            # Normalize variance scores to a 0-1 range
+            var_min, var_max = var.min(), var.max()
+            var_range = var_max - var_min
+            if var_range > 0:
+                var_normalized = (var - var_min) / var_range
+            else:
+                var_normalized = var * 0  # All zero if no range
+            
+            for name, score in var_normalized.items():
                 if pd.notnull(score):
                     scores.append({"name": name, "score": float(score)})
                     
         if "correlation" in method_list:
             print("Calculating correlation...")
-            # For unsupervised correlation, calculate the mean absolute correlation
-            # of each feature with all other features
+            # For unsupervised correlation, calculate the mean absolute correlation of each feature with all others
             corr = df[numeric_cols].corr().abs()
+            # Compute mean corr per feature
+            corr_vals = {}
             for col in corr.columns:
-                # Average correlation excluding self-correlation (which is always 1)
                 mean_corr = corr[col].drop(col).mean() if len(corr.columns) > 1 else 0
-                if pd.notnull(mean_corr):
-                    scores.append({"name": col, "score": float(mean_corr)})
+                corr_vals[col] = mean_corr if pd.notnull(mean_corr) else 0
+            corr_series = pd.Series(corr_vals)
+            # Min-max normalize to [0,1]
+            cmin, cmax = corr_series.min(), corr_series.max()
+            crange = cmax - cmin
+            if crange > 0:
+                corr_norm = (corr_series - cmin) / crange
+            else:
+                corr_norm = corr_series * 0
+            for name, score in corr_norm.items():
+                scores.append({"name": name, "score": float(score)})
                     
         if "kurtosis" in method_list:
             print("Calculating kurtosis...")
-            # Kurtosis measures peakedness of distribution
-            kurt = df[numeric_cols].kurtosis()
-            for name, score in kurt.items():
-                if pd.notnull(score):
-                    # Convert to absolute value as both high and low kurtosis can be interesting
-                    scores.append({"name": name, "score": float(abs(score))})
+            # Kurtosis measures peakedness of distribution (absolute values)
+            kurt_vals = df[numeric_cols].kurtosis().abs().fillna(0)
+            # Min-max normalize
+            kmin, kmax = kurt_vals.min(), kurt_vals.max()
+            krange = kmax - kmin
+            if krange > 0:
+                kurt_norm = (kurt_vals - kmin) / krange
+            else:
+                kurt_norm = kurt_vals * 0
+            for name, score in kurt_norm.items():
+                scores.append({"name": name, "score": float(score)})
                     
         if "skewness" in method_list:
             print("Calculating skewness...")
-            # Skewness measures asymmetry of distribution
-            skew = df[numeric_cols].skew()
-            for name, score in skew.items():
-                if pd.notnull(score):
-                    # Convert to absolute value as both positive and negative skew can be interesting
-                    scores.append({"name": name, "score": float(abs(score))})
+            # Skewness measures asymmetry of distribution (absolute values)
+            skew_vals = df[numeric_cols].skew().abs().fillna(0)
+            # Min-max normalize
+            smin, smax = skew_vals.min(), skew_vals.max()
+            srange = smax - smin
+            if srange > 0:
+                skew_norm = (skew_vals - smin) / srange
+            else:
+                skew_norm = skew_vals * 0
+            for name, score in skew_norm.items():
+                scores.append({"name": name, "score": float(score)})
         
         # Check if we collected any scores
         if not scores:
             return {"error": "No feature scores were calculated"}
             
-        # Create DataFrame of scores, group by feature name, and average scores
+        # Create DataFrame of weighted scores, group by feature name, and compute weighted average
         df_scores = pd.DataFrame(scores)
-        ranked = df_scores.groupby("name")["score"].mean().reset_index()
+        grouped = df_scores.groupby("name")["score"].sum().reset_index()
+        # Divide by total weight to get weighted mean
+        if total_weight > 0:
+            grouped["score"] = grouped["score"] / total_weight
+        ranked = grouped
         # Sort in descending order (higher score = more important)
         ranked = ranked.sort_values("score", ascending=False)
         

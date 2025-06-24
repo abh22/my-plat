@@ -36,8 +36,14 @@ def extract_wavelet_features(segment: np.ndarray, wavelet: str = "db4", level: i
     
     # Shannon entropy
     sh_entropy = -np.sum(E * np.log2(E + 1e-8))
-    
-    features = [sh_entropy]
-    feature_names = ["wavelet_entropy"]
-    
+    # Assemble full set of features: total energy, approximation energy, detail band energies, and entropy
+    total_energy = Et
+    approximation_energy = Ea
+    detail_energies = Ed  # list of detail band energies
+    features = [total_energy, approximation_energy] + detail_energies + [sh_entropy]
+    feature_names = [
+        "total_energy",
+        "approximation_energy"
+    ] + [f"detail_energy_level_{i+1}" for i in range(len(detail_energies))] + ["wavelet_entropy"]
+
     return features, feature_names

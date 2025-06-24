@@ -21,6 +21,7 @@ interface EvaluationProps {
     feature_extraction?: {
       featureExtraction?: any[];
       featureNameMap?: Record<string, string[]>;
+      processedData?: any[]; // <-- Add this line to fix the error
     };
     [key: string]: any;
   };
@@ -37,6 +38,8 @@ interface CustomMethod {
 
 const FeatureEvaluation = ({ data, onComplete }: EvaluationProps) => {
   const [selectedMethods, setSelectedMethods] = useState<string[]>(["variance"]);
+  // Optional weights for each evaluation method
+  const [methodWeights, setMethodWeights] = useState<Record<string, number>>({});
   const [rankedFeatures, setRankedFeatures] = useState<{ name: string; score: number }[]>([]);
   const [selectedFeatures, setSelectedFeatures] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
@@ -71,13 +74,26 @@ const FeatureEvaluation = ({ data, onComplete }: EvaluationProps) => {
 
     fetchCustomMethods();
   }, []);
+  // Ensure default weight of 1 for newly selected methods
+  useEffect(() => {
+    const newWeights = { ...methodWeights };
+    selectedMethods.forEach(m => {
+      if (!(m in newWeights)) newWeights[m] = 1;
+    });
+    setMethodWeights(newWeights);
+  }, [selectedMethods]);
 
+  // Toggle evaluation method
   const toggleMethod = (method: string) => {
     setSelectedMethods((prev) =>
       prev.includes(method)
         ? prev.filter((m) => m !== method)
         : [...prev, method]
     );
+  };
+  // Handle weight change for a method
+  const handleWeightChange = (method: string, value: number) => {
+    setMethodWeights(prev => ({ ...prev, [method]: value }));
   };
 
   // Toggle selection of a feature
@@ -137,165 +153,87 @@ const FeatureEvaluation = ({ data, onComplete }: EvaluationProps) => {
         extractedFeatures: data?.feature_extraction?.featureExtraction || data?.featureExtraction || []
       });
     }
-  };const handleRun = async () => {
-    console.log("Data:", data); // Log the entire data object for debugging
+  };
+ const handleRun = async () => {
+  console.log('Evaluation step received data:', data);
+  
+  // Extract features from the data structure
+  const featureData: any[] =
+    data?.extractedFeatures ||
+    data?.feature_extraction?.featureExtraction ||
+    data?.featureExtraction ||
+    [];
 
-    // Check for different possible data structures
-    let featureData = [];
-    let originalData = [];
-    
-    // Get extracted features
-    if (data?.feature_extraction?.featureExtraction) {
-      // Structure: data.feature_extraction.featureExtraction
-      featureData = data.feature_extraction.featureExtraction;
-    } else if (data?.featureExtraction) {
-      // Structure: data.featureExtraction (directly from feature extraction step)
-      featureData = data.featureExtraction;
-    } 
-      // Get original features from preprocessing or visualization step
-    if (data?.preprocessing?.processedData) {
-      originalData = data.preprocessing.processedData;
-    } else if (data?.visualization?.dataSummary?.dataFrame) {
-      originalData = data.visualization.dataSummary.dataFrame;
+  console.log('Raw feature data for evaluation:', featureData);
+
+  if (featureData.length === 0) {
+    setError("No feature data available. Please complete the Feature Extraction step first.");
+    return;
+  }
+
+  if (selectedMethods.length === 0) {
+    setError("Please select at least one evaluation method.");
+    return;
+  }
+
+  setLoading(true);
+  setError(null);
+  setSuccess(null);
+
+  try {
+    // Use the extractedFeatures array directly (each entry should be a dict of featureName: value)
+    const featureRecords: Record<string, any>[] = featureData as Record<string, any>[];
+    console.log('Using feature records for evaluation:', featureRecords.length, 'rows');
+    const payload = { features: featureRecords };
+
+    const formData = new FormData();
+    formData.append("methods", JSON.stringify(selectedMethods));
+    // Include optional weights mapping if user adjusted them
+    formData.append("weights", JSON.stringify(methodWeights));
+    formData.append("features", new Blob([JSON.stringify(payload)], { type: "application/json" }));
+
+    console.log("Sending evaluation request with methods:", selectedMethods);
+    console.log("Payload structure:", payload);
+
+    const response = await fetch("http://localhost:8002/evaluation", {
+      method: "POST",
+      body: formData,
+    });
+
+    const result = await response.json();
+    console.log("Evaluation result:", result);
+
+    if (result.error) {
+      setError(`Error from server: ${result.error}`);
+    } else if (result.rankedFeatures && result.rankedFeatures.length > 0) {
+      setRankedFeatures(result.rankedFeatures);
+      setSuccess("Feature evaluation completed successfully.");
+    } else {
+      setError("No feature scores were returned from the server.");
     }
-    
-    // Combine both feature sets if available
-    const combinedFeatures = [...featureData, ...originalData].filter(Boolean);
-    
-    if (combinedFeatures.length === 0) {
-      setError("No feature data available. Please complete the Data Preprocessing or Feature Extraction step first.");
-      return;
-    }
-
-    if (selectedMethods.length === 0) {
-      setError("Please select at least one evaluation method.");
-      return;
-    }
-
-    setLoading(true);
-    setError(null);
-    setSuccess(null);    try {
-      // Create a payload using the appropriate data structure
-      const payload = {
-        features: combinedFeatures
-      };
-
-      const formData = new FormData();
-      formData.append("methods", JSON.stringify(selectedMethods));
-      formData.append("features", new Blob([JSON.stringify(payload)], { type: "application/json" }));
-
-      console.log("Sending evaluation request with methods:", selectedMethods);
-
-      const response = await fetch("http://localhost:8002/evaluation", {
-        method: "POST",
-        body: formData,
-      });
-
-      const result = await response.json();
-      console.log("Evaluation result:", result);
-
-      if (result.error) {
-        setError(`Error from server: ${result.error}`);
-      } else if (result.rankedFeatures && result.rankedFeatures.length > 0) {
-        setRankedFeatures(result.rankedFeatures);
-        setSuccess("Feature evaluation completed successfully.");
-          // No need to call onComplete here - we'll do it via the "Continue" button
+  } catch (error: any) {
+    setError(`Error: ${error.message || "Unknown error occurred"}`);
+    console.error("Evaluation error:", error);
+  } finally {
+    setLoading(false);
+  }
+};
+  function toggleExcludeColumn(col: string): void {
+    setExcludedColumns(prev => {
+      if (prev.includes(col)) {
+        // Remove from excluded, add back to selected if selectAll is true
+        const updated = prev.filter(c => c !== col);
+        if (selectAll) {
+          setSelectedFeatures(rankedFeatures.map(f => f.name).filter(name => !updated.includes(name)));
+        }
+        return updated;
       } else {
-        setError("No feature scores were returned from the server.");
+        // Add to excluded, remove from selected
+        setSelectedFeatures(selectedFeatures.filter(f => f !== col));
+        return [...prev, col];
       }
-    } catch (error: any) {
-      setError(`Error: ${error.message || "Unknown error occurred"}`);
-      console.error("Evaluation error:", error);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  // Function to detect potential ID columns
-  const detectIdLikeColumns = (features: any[]): string[] => {
-    if (!features || features.length === 0) return [];
-    
-    const potentialIdColumns: string[] = [];
-    const columnNames = Object.keys(features[0] || {});
-    
-    // Check for columns with names that suggest they are IDs
-    const idNamePatterns = [
-      /\bid\b/i,           // "id" as a word
-      /\bcode\b/i,         // "code" as a word
-      /\bkey\b/i,          // "key" as a word
-      /\bindex\b/i,        // "index" as a word
-      /\buuid\b/i,         // "uuid" as a word
-      /\bnumber\b/i,       // "number" as a word
-      /^id_/i,             // starts with "id_"
-      /_id$/i,             // ends with "_id"
-      /\bidentifier\b/i,   // "identifier" as a word
-      /\brecord\b/i,       // "record" as a word
-    ];
-
-    // For each column, check if it's likely an ID column
-    for (const column of columnNames) {
-      // Check if column name matches any ID patterns
-      const isIdByName = idNamePatterns.some(pattern => pattern.test(column));
-      
-      if (isIdByName) {
-        potentialIdColumns.push(column);
-        continue;
-      }
-      
-      // Check for columns with unique values (sample first few rows)
-      const sampleSize = Math.min(features.length, 100);
-      const values = new Set();
-      let allUnique = true;
-      
-      for (let i = 0; i < sampleSize; i++) {
-        const value = features[i][column];
-        if (values.has(value)) {
-          allUnique = false;
-          break;
-        }
-        values.add(value);
-      }
-      
-      // If all values are unique and numeric or strings that look like IDs
-      if (allUnique && values.size > 10) {
-        const valuesArray = Array.from(values);
-        // Check if values follow a sequential pattern
-        let isSequential = true;
-        for (let i = 1; i < Math.min(valuesArray.length, 10); i++) {
-          if (Number(valuesArray[i]) !== Number(valuesArray[i - 1]) + 1) {
-            isSequential = false;
-            break;
-          }
-        }
-        
-        if (isSequential) {
-          potentialIdColumns.push(column);
-        }
-      }
-    }
-    
-    return potentialIdColumns;
-  };
-
-  const toggleExcludeColumn = (columnName: string) => {
-    setExcludedColumns(prev => 
-      prev.includes(columnName) 
-        ? prev.filter(c => c !== columnName) 
-        : [...prev, columnName]
-    );
-  };
-
-  // Effect to auto-detect ID-like columns when feature data changes
-  useEffect(() => {
-    if (rankedFeatures.length > 0) {
-      const detectedIdColumns = detectIdLikeColumns(rankedFeatures);
-      setAutoDetectedIdColumns(detectedIdColumns);
-      
-      // Automatically exclude detected ID columns
-      const newExcludedColumns = detectedIdColumns.filter(c => !excludedColumns.includes(c));
-      setExcludedColumns(prev => [...prev, ...newExcludedColumns]);
-    }
-  }, [rankedFeatures]);
+    });
+  }
 
   return (    <div className="p-4 space-y-6 max-w-5xl mx-auto">
       <div className="mb-6">
@@ -364,7 +302,9 @@ const FeatureEvaluation = ({ data, onComplete }: EvaluationProps) => {
         <div className="text-sm text-gray-500 mb-4">
           Choose one or more methods to evaluate feature importance. Each method uses different criteria to rank features.
         </div>
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">          <div className="border rounded-md p-3 hover:bg-amber-50 transition-colors duration-150">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          {/* Variance Method */}
+          <div className="border rounded-md p-3 hover:bg-amber-50 transition-colors duration-150">
             <Label className="flex items-center space-x-2 mb-2">
               <Checkbox 
                 checked={selectedMethods.includes("variance")}
@@ -374,8 +314,23 @@ const FeatureEvaluation = ({ data, onComplete }: EvaluationProps) => {
               <span className="font-medium text-gray-800">Variance</span>
             </Label>
             <p className="text-xs text-gray-500 pl-6">Features with higher variance may contain more information</p>
+           {selectedMethods.includes("variance") && (
+             <div className="flex items-center space-x-2 pl-6 mt-2">
+               <Label className="text-xs">Weight:</Label>
+               <Input
+                 type="number"
+                 step="0.1"
+                 min={0}
+                 value={methodWeights["variance"]}
+                 onChange={e => handleWeightChange("variance", Number(e.target.value))}
+                 className="w-16"
+               />
+             </div>
+           )}
           </div>
-            <div className="border rounded-md p-3 hover:bg-amber-50 transition-colors duration-150">
+
+          {/* Correlation Method */}
+          <div className="border rounded-md p-3 hover:bg-amber-50 transition-colors duration-150">
             <Label className="flex items-center space-x-2 mb-2">
               <Checkbox
                 checked={selectedMethods.includes("correlation")}
@@ -385,8 +340,23 @@ const FeatureEvaluation = ({ data, onComplete }: EvaluationProps) => {
               <span className="font-medium text-gray-800">Correlation</span>
             </Label>
             <p className="text-xs text-gray-500 pl-6">Features highly correlated with others may be more important</p>
+           {selectedMethods.includes("correlation") && (
+             <div className="flex items-center space-x-2 pl-6 mt-2">
+               <Label className="text-xs">Weight:</Label>
+               <Input
+                 type="number"
+                 step="0.1"
+                 min={0}
+                 value={methodWeights["correlation"]}
+                 onChange={e => handleWeightChange("correlation", Number(e.target.value))}
+                 className="w-16"
+               />
+             </div>
+           )}
           </div>
-            <div className="border rounded-md p-3 hover:bg-amber-50 transition-colors duration-150">
+
+          {/* Kurtosis Method */}
+          <div className="border rounded-md p-3 hover:bg-amber-50 transition-colors duration-150">
             <Label className="flex items-center space-x-2 mb-2">
               <Checkbox
                 checked={selectedMethods.includes("kurtosis")}
@@ -396,8 +366,23 @@ const FeatureEvaluation = ({ data, onComplete }: EvaluationProps) => {
               <span className="font-medium text-gray-800">Kurtosis</span>
             </Label>
             <p className="text-xs text-gray-500 pl-6">Measures peakedness of feature distributions</p>
+           {selectedMethods.includes("kurtosis") && (
+             <div className="flex items-center space-x-2 pl-6 mt-2">
+               <Label className="text-xs">Weight:</Label>
+               <Input
+                 type="number"
+                 step="0.1"
+                 min={0}
+                 value={methodWeights["kurtosis"]}
+                 onChange={e => handleWeightChange("kurtosis", Number(e.target.value))}
+                 className="w-16"
+               />
+             </div>
+           )}
           </div>
-            <div className="border rounded-md p-3 hover:bg-amber-50 transition-colors duration-150">
+
+          {/* Skewness Method */}
+          <div className="border rounded-md p-3 hover:bg-amber-50 transition-colors duration-150">
             <Label className="flex items-center space-x-2 mb-2">
               <Checkbox
                 checked={selectedMethods.includes("skewness")}
@@ -407,6 +392,19 @@ const FeatureEvaluation = ({ data, onComplete }: EvaluationProps) => {
               <span className="font-medium text-gray-800">Skewness</span>
             </Label>
             <p className="text-xs text-gray-500 pl-6">Measures asymmetry of feature distributions</p>
+           {selectedMethods.includes("skewness") && (
+             <div className="flex items-center space-x-2 pl-6 mt-2">
+               <Label className="text-xs">Weight:</Label>
+               <Input
+                 type="number"
+                 step="0.1"
+                 min={0}
+                 value={methodWeights["skewness"]}
+                 onChange={e => handleWeightChange("skewness", Number(e.target.value))}
+                 className="w-16"
+               />
+             </div>
+           )}
           </div>
         </div>
 

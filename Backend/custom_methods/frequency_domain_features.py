@@ -2,6 +2,7 @@
 Frequency-domain EMG feature extraction functions.
 """
 import numpy as np
+from scipy.signal import detrend
 
 
 def extract_frequency_domain_features(segment: np.ndarray, fs: int = 2500) -> tuple:
@@ -15,6 +16,8 @@ def extract_frequency_domain_features(segment: np.ndarray, fs: int = 2500) -> tu
     Returns:
         tuple: (features_list, feature_names_list)
     """
+    # Detrend using scipy.signal to remove DC offset (constant trend)
+    segment = detrend(segment, type='constant')
     # FFT computation
     n_fft = 2 ** (len(segment) - 1).bit_length()
     y = np.fft.fft(segment, n_fft)

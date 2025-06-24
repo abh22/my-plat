@@ -1,10 +1,15 @@
-from fastapi import FastAPI, UploadFile, File, Form
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List, Dict, Any, Optional
 import json
 import pandas as pd
 import numpy as np
+import matplotlib
+matplotlib.use('Agg')  # Use non-interactive backend for server-side plotting
+import matplotlib.pyplot as plt
+import io
+import base64
 from sklearn.feature_selection import VarianceThreshold
 from sklearn.decomposition import PCA
 from sklearn.cluster import KMeans
@@ -14,8 +19,8 @@ from sklearn.preprocessing import PolynomialFeatures
 from sklearn.manifold import TSNE, Isomap
 from sklearn.decomposition import KernelPCA, TruncatedSVD, FastICA
 import traceback
-import io
 import os
+import importlib.util
 
 app = FastAPI()
 
@@ -59,6 +64,7 @@ async def extraction(file: UploadFile = File(...), config: str = Form(...)):
                 if isinstance(data, list):
                     df = pd.DataFrame(data)
                     print("Loaded DataFrame from JSON array payload")
+                    featureNameMapping = {}
                 else:
                     # Extract DataFrame payload; support both 'processedData' and 'data' keys
                     if "processedData" in data:
@@ -73,9 +79,8 @@ async def extraction(file: UploadFile = File(...), config: str = Form(...)):
                     elif isinstance(payload, dict):
                         df = pd.json_normalize(payload)
                         print("Loaded DataFrame from payload dict using json_normalize")
-                # Get feature name mapping if available
-                featureNameMapping = data.get("featureNameMapping", {})
-                
+                    # Get feature name mapping if available
+                    featureNameMapping = data.get("featureNameMapping", {}) if isinstance(data, dict) else {}
             except (json.JSONDecodeError, UnicodeDecodeError):
                 print("Content is not valid JSON, trying CSV format...")
                 # If not valid JSON, try reading as CSV
@@ -96,7 +101,7 @@ async def extraction(file: UploadFile = File(...), config: str = Form(...)):
                 
         except Exception as e:
             print(f"Error reading file: {e}")
-            return {"error": f"Invalid file format: {str(e)}"}
+            raise HTTPException(status_code=400, detail=f"Invalid file format: {str(e)}")
             
         print(f"Data shape: {df.shape}")
         print(f"Columns: {df.columns.tolist()[:10]}...")
@@ -123,6 +128,8 @@ async def extraction(file: UploadFile = File(...), config: str = Form(...)):
             return {"error": "No numeric features selected for extraction"}
 
         print(f"Using {len(numeric_features)} numeric features for extraction")
+        # Save original features for mapping composite features
+        original_features = numeric_features.copy()
 
         # Create a copy of the dataframe with only numeric features for extraction
         X = df[numeric_features].copy()
@@ -130,7 +137,9 @@ async def extraction(file: UploadFile = File(...), config: str = Form(...)):
         # Handle missing values in numeric features (required for most algorithms)
         X = X.fillna(X.mean())
 
-        # Apply selected methods
+        # Create preview_list to hold feature preview entries
+        preview_list = []
+        # Loop through selected methods
         for method in methods:
             print(f"Applying {method} method")
 
@@ -144,11 +153,15 @@ async def extraction(file: UploadFile = File(...), config: str = Form(...)):
 
                 # Replace the original features with PCA components
                 pca_cols = [f"PCA_Component_{i+1}" for i in range(n_components)]
+                # Map each PCA component to its corresponding original feature by index
+                for idx, col in enumerate(pca_cols):
+                    if idx < len(original_features):
+                        featureNameMapping[col] = [original_features[idx]]
                 X = pd.DataFrame(pca_result, columns=pca_cols, index=X.index)
-
-                # Update the feature name mapping
-                for col in pca_cols:
-                    featureNameMapping[col] = numeric_features  # Map PCA components to original features
+                # add preview entries for PCA components for all rows
+                for row in pca_result:
+                    for i, col in enumerate(pca_cols):
+                        preview_list.append({"feature": col, "value": float(row[i])})
 
             elif method == "kernelPCA":
                 # Kernel PCA
@@ -157,10 +170,22 @@ async def extraction(file: UploadFile = File(...), config: str = Form(...)):
                 print(f"Kernel PCA with {n_components} components and kernel={kernel}")
 
                 kpca = KernelPCA(n_components=n_components, kernel=kernel)
-                kpca_result = kpca.fit_transform(X)
+                try:
+                    kpca_result = kpca.fit_transform(X)
+                except Exception as e:
+                    print(f"Kernel PCA skipped due to error: {e}")
+                    continue
 
                 kpca_cols = [f"KPCA{i+1}" for i in range(n_components)]
+                # Map each Kernel PCA component to its corresponding original feature by index
+                for idx, col in enumerate(kpca_cols):
+                    if idx < len(original_features):
+                        featureNameMapping[col] = [original_features[idx]]
                 X = pd.DataFrame(kpca_result, columns=kpca_cols, index=X.index)
+                # add preview entries for Kernel PCA components across all rows
+                for row in kpca_result:
+                    for i, col in enumerate(kpca_cols):
+                        preview_list.append({"feature": col, "value": float(row[i])})
 
             elif method == "truncatedSVD":
                 # Truncated SVD
@@ -171,7 +196,15 @@ async def extraction(file: UploadFile = File(...), config: str = Form(...)):
                 svd_result = svd.fit_transform(X)
 
                 svd_cols = [f"SVD{i+1}" for i in range(n_components)]
+                # Map each SVD component to its corresponding original feature by index
+                for idx, col in enumerate(svd_cols):
+                    if idx < len(original_features):
+                        featureNameMapping[col] = [original_features[idx]]
                 X = pd.DataFrame(svd_result, columns=svd_cols, index=X.index)
+                # add preview entries for Truncated SVD components across all rows
+                for row in svd_result:
+                    for i, col in enumerate(svd_cols):
+                        preview_list.append({"feature": col, "value": float(row[i])})
 
             elif method == "fastICA":
                 # Independent Component Analysis
@@ -182,18 +215,43 @@ async def extraction(file: UploadFile = File(...), config: str = Form(...)):
                 ica_result = ica.fit_transform(X)
 
                 ica_cols = [f"ICA{i+1}" for i in range(n_components)]
+                # Map each ICA component to its corresponding original feature by index
+                for idx, col in enumerate(ica_cols):
+                    if idx < len(original_features):
+                        featureNameMapping[col] = [original_features[idx]]
                 X = pd.DataFrame(ica_result, columns=ica_cols, index=X.index)
+                # add preview entries for FastICA components across all rows
+                for row in ica_result:
+                    for i, col in enumerate(ica_cols):
+                        preview_list.append({"feature": col, "value": float(row[i])})
 
             elif method == "tsne":
                 # t-SNE
                 n_components = settings.get("pcaComponents", 2)
                 print(f"t-SNE with {n_components} components")
 
-                tsne = TSNE(n_components=n_components)
-                tsne_result = tsne.fit_transform(X)
+                # Determine safe perplexity for small datasets
+                n_samples = X.shape[0]
+                default_perp = settings.get("perplexity", 30)
+                perp = min(default_perp, max(1, n_samples - 1))
+                print(f"t-SNE with perplexity={perp} on {n_samples} samples")
+                tsne = TSNE(n_components=n_components, perplexity=perp)
+                try:
+                    tsne_result = tsne.fit_transform(X)
+                except Exception as e:
+                    print(f"t-SNE skipped due to error: {e}")
+                    continue
 
                 tsne_cols = [f"tSNE{i+1}" for i in range(n_components)]
+                # Map each t-SNE component to its corresponding original feature by index
+                for idx, col in enumerate(tsne_cols):
+                    if idx < len(original_features):
+                        featureNameMapping[col] = [original_features[idx]]
                 X = pd.DataFrame(tsne_result, columns=tsne_cols)
+                # add preview entries for t-SNE components across all rows
+                for row in tsne_result:
+                    for i, col in enumerate(tsne_cols):
+                        preview_list.append({"feature": col, "value": float(row[i])})
 
             elif method == "isomap":
                 # Isomap
@@ -205,17 +263,374 @@ async def extraction(file: UploadFile = File(...), config: str = Form(...)):
                 isomap_result = isomap.fit_transform(X)
 
                 isomap_cols = [f"Isomap{i+1}" for i in range(n_components)]
+                # Map each Isomap component to its corresponding original feature by index
+                for idx, col in enumerate(isomap_cols):
+                    if idx < len(original_features):
+                        featureNameMapping[col] = [original_features[idx]]
                 X = pd.DataFrame(isomap_result, columns=isomap_cols, index=X.index)
+                # add preview entries for Isomap components across all rows
+                for row in isomap_result:
+                    for i, col in enumerate(isomap_cols):
+                        preview_list.append({"feature": col, "value": float(row[i])})
 
         # Handle any remaining NaN values
         X = X.fillna(0)
+        # Initialize containers for custom methods
+        ar_results = {}
+        freq_results = {}
+        td_results = {}
+        ent_results = {}
+        wav_results = {}
+
+        # If AR features requested, run custom AR extractor and return feature/value pairs
+        if any('ar_features' in m.lower() for m in methods):
+            # Dynamically load ar_features module
+            spec = importlib.util.spec_from_file_location(
+                "ar_features",
+                os.path.join(os.path.dirname(__file__), "custom_methods", "ar_features.py")
+            )
+            ar_mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(ar_mod)
+            extract_ar_features = ar_mod.extract_ar_features
+
+            # Determine which channels to process for AR features
+            ar_targets = config.get('channels', []) or []
+            ar_targets = [col for col in ar_targets if col in numeric_features]
+            # If none, skip AR extraction
+            if not ar_targets:
+                print("No AR channels selected, skipping AR extraction")
+            else:
+                lags = settings.get('lags', 6)
+                for col in ar_targets:
+                    series = df[col].fillna(df[col].mean()).values
+                    # Sliding-window parameters
+                    window_size = settings.get('windowSize', 256)
+                    window_step = settings.get('windowStep', window_size // 2)
+                    windowed_feats: List[List[float]] = []
+                    # Slide over the time series
+                    for start in range(0, len(series) - window_size + 1, window_step):
+                        window = series[start : start + window_size]
+                        feats, names = extract_ar_features(window, lags)
+                        windowed_feats.append(feats)
+                    # Store windowed features for this channel
+                    ar_results[col] = (names, windowed_feats)
+            # Add AR feature entries to preview_list (using first window only)
+            for ch, (names, windowed_feats) in ar_results.items():
+                if windowed_feats:
+                    first_feats = windowed_feats[0]
+                    for idx, name in enumerate(names):
+                        preview_list.append({"feature": f"{ch}_{name}", "value": float(first_feats[idx])})
+
+        # After AR extraction, create composite records per window combining all channels
+        if ar_results:
+            # Determine number of windows (assumes same count across channels)
+            window_counts = [len(w_feats) for (_, w_feats) in ar_results.values()]
+            num_windows = min(window_counts) if window_counts else 0
+            processed_ar_records: List[Dict[str, Any]] = []
+            for w in range(num_windows):
+                record: Dict[str, Any] = {}
+                for ch, (names, windowed_feats) in ar_results.items():
+                    feats = windowed_feats[w]
+                    for i, name in enumerate(names):
+                        record[f"{ch}_{name}"] = feats[i]
+                processed_ar_records.append(record)
+            response_processed = processed_ar_records
+            # Build preview_list entries using first window only
+            preview_list = []
+            if processed_ar_records:
+                first = processed_ar_records[0]
+                for feature_key, feature_val in first.items():
+                    preview_list.append({"feature": feature_key, "value": float(feature_val)})
+        else:
+            response_processed = X.to_dict(orient='records')
 
         print(f"Feature extraction complete. Final shape: {X.shape}")
         print(f"Updated Feature Name Mapping: {featureNameMapping}")
 
+        # Prepare combined preview/processed lists for custom methods
+        processed_list = []
+
+        # Handle Dominant Frequency extraction if requested
+        # Handle Dominant Frequency extraction if requested
+        if any('dominant' in m.lower() for m in methods):
+            print("--- Dominant Frequency branch entered ---")
+             # Determine which channels to process for Dominant Frequency
+            dom_targets = config.get('channels', []) or numeric_features
+            print(f"Dominant frequency channel targets: {dom_targets}")
+             # Filter only numeric features
+            dom_targets = [col for col in dom_targets if col in numeric_features]
+            print(f"Filtered dom_targets: {dom_targets}")
+            print(f"Dominant frequency targets: {dom_targets}")
+            # Dynamically load dominant_frequency custom method
+            spec_dom = importlib.util.spec_from_file_location(
+                "dominant_frequency",
+                os.path.join(os.path.dirname(__file__), "custom_methods", "dominant_frequency.py")
+            )
+            df_mod = importlib.util.module_from_spec(spec_dom)
+            spec_dom.loader.exec_module(df_mod)
+            process_dom = getattr(df_mod, 'process_data', None)
+            if not process_dom:
+                return {"error": "Dominant frequency method not found"}
+            # Compute dominant frequencies for targeted channels
+            # Detrend each channel (remove DC offset) before research process_data
+            df_input = df[dom_targets].copy()
+            # Removed detrending: pass raw channel data directly
+            dom_df = process_dom(df_input, settings)
+            print(f"Dominant frequency raw df: {dom_df}")
+             # Build preview list
+            preview_dom = []
+            for feat, val in dom_df.to_dict(orient='records')[0].items():
+                print(f"DF feature {feat} value {val}")
+                safe_val = float(val) if not pd.isna(val) else 0.0
+                preview_dom.append({"feature": feat, "value": safe_val})
+            print(f"DF preview_dom: {preview_dom}")
+             # Accumulate DF previews instead of returning early
+            preview_list.extend(preview_dom)
+
+        # If AR features requested, run custom AR extractor and return feature/value pairs
+        if any('ar_features' in m.lower() for m in methods):
+            # Dynamically load ar_features module
+            spec = importlib.util.spec_from_file_location(
+                "ar_features",
+                os.path.join(os.path.dirname(__file__), "custom_methods", "ar_features.py")
+            )
+            ar_mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(ar_mod)
+            extract_ar_features = ar_mod.extract_ar_features
+
+            # Determine which channels to process for AR features
+            ar_targets = config.get('channels', []) or []
+            ar_targets = [col for col in ar_targets if col in numeric_features]
+            # If none, skip AR extraction
+            if not ar_targets:
+                print("No AR channels selected, skipping AR extraction")
+            else:
+                lags = settings.get('lags', 6)
+                for col in ar_targets:
+                     series = df[col].fillna(df[col].mean()).values
+                     # Sliding-window parameters
+                     window_size = settings.get('windowSize', 256)
+                     window_step = settings.get('windowStep', window_size // 2)
+                     windowed_feats: List[List[float]] = []
+                     # Slide over the time series
+                     for start in range(0, len(series) - window_size + 1, window_step):
+                         window = series[start : start + window_size]
+                         feats, names = extract_ar_features(window, lags)
+                         windowed_feats.append(feats)
+                     # Store windowed features for this channel
+                     ar_results[col] = (names, windowed_feats)
+            # continue to final aggregation
+
+        # Preview frequency-domain features if requested
+        if any('frequency_domain' in m.lower() for m in methods):
+            spec_freq = importlib.util.spec_from_file_location(
+                "frequency_domain_features",
+                os.path.join(os.path.dirname(__file__), "custom_methods", "frequency_domain_features.py")
+            )
+            freq_mod = importlib.util.module_from_spec(spec_freq)
+            spec_freq.loader.exec_module(freq_mod)
+            extract_freq = getattr(freq_mod, 'extract_frequency_domain_features', None)
+            if extract_freq:
+                freq_targets = config.get('channels', []) or numeric_features
+                freq_targets = [col for col in freq_targets if col in numeric_features]
+                fs = settings.get('sampling_rate', 2500)
+                for col in freq_targets:
+                    segment = df[col].fillna(df[col].mean()).values
+                    feats, names = extract_freq(segment, fs)
+                    clean_feats = [float(f) if not pd.isna(f) else 0.0 for f in feats]
+                    freq_results[col] = (names, clean_feats)
+                    for name, val in zip(names, clean_feats):
+                        feature_name = f"{col}_{name}"
+                        preview_list.append({"feature": feature_name, "value": val})
+
+        # Preview time-domain features if requested
+        if any('time_domain' in m.lower() for m in methods):
+            spec_td = importlib.util.spec_from_file_location(
+                "time_domain_features",
+                os.path.join(os.path.dirname(__file__), "custom_methods", "time_domain_features.py")
+            )
+            td_mod = importlib.util.module_from_spec(spec_td)
+            spec_td.loader.exec_module(td_mod)
+            process_td = getattr(td_mod, 'process_data', None)
+            if process_td:
+                td_targets = config.get('channels', []) or numeric_features
+                td_targets = [col for col in td_targets if col in numeric_features]
+                df_input = df[td_targets].copy()
+                td_df = process_td(df_input, settings)
+                for feat, val in td_df.to_dict(orient='records')[0].items():
+                    safe_val = float(val) if not pd.isna(val) else 0.0
+                    preview_list.append({"feature": feat, "value": safe_val})
+                # In the time-domain branch, capture results per channel for plotting
+                for col in td_targets:
+                    # Extract features for this channel from first trial
+                    first_row = td_df.iloc[0].to_dict()
+                    channel_feats = {k: v for k, v in first_row.items() if f'_{col}_' in k}
+                    names = [k.split(f'_{col}_')[-1] for k in channel_feats.keys()]
+                    values = [float(v) if not pd.isna(v) else 0.0 for v in channel_feats.values()]
+                    td_results[col] = (names, values)
+                    for name, val in zip(names, values):
+                        preview_list.append({"feature": f"{col}_{name}", "value": val})
+
+        # Preview entropy features if requested
+        if any('entropy_features' in m.lower() for m in methods):
+            spec_ent = importlib.util.spec_from_file_location(
+                "entropy_features",
+                os.path.join(os.path.dirname(__file__), "custom_methods", "entropy_features.py")
+            )
+            ent_mod = importlib.util.module_from_spec(spec_ent)
+            spec_ent.loader.exec_module(ent_mod)
+            extract_ent = getattr(ent_mod, 'extract_entropy_features', None)
+            if extract_ent:
+                ent_targets = config.get('channels', []) or numeric_features
+                ent_targets = [col for col in ent_targets if col in numeric_features]
+                for col in ent_targets:
+                    segment = df[col].fillna(df[col].mean()).values
+                    feats, names = extract_ent(segment)
+                    clean_feats = [float(f) if not pd.isna(f) else 0.0 for f in feats]
+                    for name, val in zip(names, clean_feats):
+                        feature_name = f"{col}_{name}"
+                        preview_list.append({"feature": feature_name, "value": val})
+                    # After appending entropy preview, store ent_results for plotting
+                    ent_results[col] = (names, clean_feats)
+
+        # Preview wavelet features if requested
+        if any('wavelet' in m.lower() for m in methods):
+            spec_wav = importlib.util.spec_from_file_location(
+                "wavelet_features",
+                os.path.join(os.path.dirname(__file__), "custom_methods", "wavelet_features.py")
+            )
+            wav_mod = importlib.util.module_from_spec(spec_wav)
+            spec_wav.loader.exec_module(wav_mod)
+            extract_wav = getattr(wav_mod, 'extract_wavelet_features', None)
+            if extract_wav:
+                wav_targets = config.get('channels', []) or numeric_features
+                wav_targets = [col for col in wav_targets if col in numeric_features]
+                wavelet = settings.get('wavelet', 'db4')
+                level = settings.get('level', 4)
+                for col in wav_targets:
+                    segment = df[col].fillna(df[col].mean()).values
+                    feats, names = extract_wav(segment, wavelet, level)
+                    clean_feats = [float(f) if not pd.isna(f) else 0.0 for f in feats]
+                    for name, val in zip(names, clean_feats):
+                        feature_name = f"{col}_{name}"
+                        preview_list.append({"feature": feature_name, "value": val})
+
+        # DEBUG: log combined preview_list (first 5 entries only)
+        if len(preview_list) > 5:
+            print(f"DEBUG combined preview_list (first 5 of {len(preview_list)} entries): {preview_list[:5]}")
+        else:
+            print(f"DEBUG combined preview_list: {preview_list}")
+        # Construct the base response payload
+        if preview_list:
+            # Show all AR feature entries when AR method is used, otherwise show first five items
+            use_full_preview = any('ar_features' in m.lower() for m in methods)
+            response = {
+                "message": "Feature extraction completed successfully",
+                "preview": preview_list if use_full_preview else preview_list[:5],
+                "processedData": response_processed,
+                "featureNameMapping": featureNameMapping,
+            }
+
+            # Only generate sparklines for built-in extraction methods
+            built_in = {"pca","kernelPCA","truncatedSVD","fastICA","tsne","isomap"}
+            if any(m in built_in for m in methods):
+                plots = {}
+                stats = {}
+                comp_cols = list(X.columns)[:2]
+                for col in comp_cols:
+                    series = X[col].values[:10000]
+                    stats[col] = {"mean": float(np.mean(series)), "std": float(np.std(series))}
+                    fig, ax = plt.subplots(figsize=(4,1))
+                    ax.plot(series, linewidth=1, color='blue')
+                    ax.axis('off')
+                    buf = io.BytesIO()
+                    fig.savefig(buf, format='png', bbox_inches='tight', pad_inches=0)
+                    buf.seek(0)
+                    img_b64 = base64.b64encode(buf.read()).decode('utf-8')
+                    plots[col] = f"data:image/png;base64,{img_b64}"
+                    plt.close(fig)
+                response["plots"] = plots
+                response["stats"] = stats
+            # Custom AR feature bar chart
+            if ar_results:
+                ar_plots = {}
+                for ch, (names, windowed_feats) in ar_results.items():
+                    # Use first window's AR coefficients for plotting
+                    feats = windowed_feats[0] if windowed_feats else [0.0] * len(names)
+                    fig, ax = plt.subplots(figsize=(len(names) * 0.5, 2))
+                    ax.bar(names, feats, color='green')
+                    ax.set_title(f"AR Coefficients: {ch}", fontsize=8)
+                    ax.tick_params(axis='x', rotation=45, labelsize=6)
+                    plt.tight_layout()
+                    buf = io.BytesIO()
+                    fig.savefig(buf, format='png', bbox_inches='tight', pad_inches=0)
+                    buf.seek(0)
+                    ar_plots[ch] = f"data:image/png;base64,{base64.b64encode(buf.read()).decode('utf-8')}"
+                    plt.close(fig)
+                response['arPlots'] = ar_plots
+            # Generate bar charts for custom method features if present
+            if freq_results:
+                freq_plots = {}
+                for ch, (names, feats) in freq_results.items():
+                    fig, ax = plt.subplots(figsize=(len(names)*0.5, 2))
+                    ax.bar(names, feats, color='purple')
+                    ax.set_title(f"Freq Features: {ch}", fontsize=8)
+                    ax.tick_params(axis='x', rotation=45, labelsize=6)
+                    plt.tight_layout()
+                    buf = io.BytesIO()
+                    fig.savefig(buf, format='png', bbox_inches='tight', pad_inches=0)
+                    buf.seek(0)
+                    freq_plots[ch] = f"data:image/png;base64,{base64.b64encode(buf.read()).decode('utf-8')}"
+                    plt.close(fig)
+                response['freqPlots'] = freq_plots
+            if td_results:
+                td_plots = {}
+                for ch, (names, feats) in td_results.items():
+                    fig, ax = plt.subplots(figsize=(len(names)*0.5, 2))
+                    ax.bar(names, feats, color='teal')
+                    ax.set_title(f"Time-Domain Features: {ch}", fontsize=8)
+                    ax.tick_params(axis='x', rotation=45, labelsize=6)
+                    plt.tight_layout()
+                    buf = io.BytesIO()
+                    fig.savefig(buf, format='png', bbox_inches='tight', pad_inches=0)
+                    buf.seek(0)
+                    td_plots[ch] = f"data:image/png;base64,{base64.b64encode(buf.read()).decode('utf-8')}"
+                    plt.close(fig)
+                response['tdPlots'] = td_plots
+            if ent_results:
+                ent_plots = {}
+                for ch, (names, feats) in ent_results.items():
+                    fig, ax = plt.subplots(figsize=(len(names)*0.5, 2))
+                    ax.bar(names, feats, color='orange')
+                    ax.set_title(f"Entropy Features: {ch}", fontsize=8)
+                    ax.tick_params(axis='x', rotation=45, labelsize=6)
+                    plt.tight_layout()
+                    buf = io.BytesIO()
+                    fig.savefig(buf, format='png', bbox_inches='tight', pad_inches=0)
+                    buf.seek(0)
+                    ent_plots[ch] = f"data:image/png;base64,{base64.b64encode(buf.read()).decode('utf-8')}"
+                    plt.close(fig)
+                response['entPlots'] = ent_plots
+            if wav_results:
+                wav_plots = {}
+                for ch, (names, feats) in wav_results.items():
+                    fig, ax = plt.subplots(figsize=(len(names)*0.5, 2))
+                    ax.bar(names, feats, color='brown')
+                    ax.set_title(f"Wavelet Features: {ch}", fontsize=8)
+                    ax.tick_params(axis='x', rotation=45, labelsize=6)
+                    plt.tight_layout()
+                    buf = io.BytesIO()
+                    fig.savefig(buf, format='png', bbox_inches='tight', pad_inches=0)
+                    buf.seek(0)
+                    wav_plots[ch] = f"data:image/png;base64,{base64.b64encode(buf.read()).decode('utf-8')}"
+                    plt.close(fig)
+                response['wavPlots'] = wav_plots
+            return response
+
+        # Default return: no custom features selected
         return {
             "message": "Feature extraction completed successfully",
-            "preview": X.head(10).to_dict(orient="records"),
+            "preview": [],  # No AR features to preview
             "processedData": X.to_dict(orient="records"),
             "featureNameMapping": featureNameMapping,
         }
@@ -223,4 +638,4 @@ async def extraction(file: UploadFile = File(...), config: str = Form(...)):
     except Exception as e:
         print(f"Error in feature extraction: {str(e)}")
         traceback.print_exc()
-        return {"error": f"Error in feature extraction: {str(e)}"}
+        raise HTTPException(status_code=500, detail=f"Error in feature extraction: {str(e)}")

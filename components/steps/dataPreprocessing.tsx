@@ -68,62 +68,18 @@ export default function DataPreprocessing({ data, onComplete }: { data: any; onC
   const [customMethodParams, setCustomMethodParams] = useState<Record<string, Record<string, any>>>({})
 
   useEffect(() => {
-    // Check if we have data from previous steps
-    const previousData = data.visualization?.dataSummary?.dataFrame || [];
-    
-    if (previousData.length > 0) {
-      console.log("Using data from previous component", previousData.length, "rows");
-      setRawRows(previousData);
+    // Always use data from visualization (already parsed)
+    const prev = data.visualization?.dataSummary?.dataFrame || [];
+    if (prev.length > 0) {
+      setRawRows(prev);
       setIsParsing(false);
-      
-      // If we have columns from visualization, use them for the selectedColumns
-      const visualizationColumns = data.visualization?.dataSummary?.columns || [];
-      if (visualizationColumns.length > 0 && selectedColumns.length === 0) {
-        console.log("Setting columns from visualization data:", visualizationColumns);
-        // Ensure the columns dropdown is populated
-        setColumns(visualizationColumns);
-        setSelectedColumns(visualizationColumns);
+      const cols = data.visualization?.dataSummary?.columns || [];
+      if (cols.length > 0 && selectedColumns.length === 0) {
+        setColumns(cols);
+        setSelectedColumns(cols);
       }
-      return;
     }
-    
-    // Fallback to file parsing if needed
-    setIsParsing(true);
-    const file = data.data_import?.fileObjects?.[0] || data.file;
-    if (!file || !(file instanceof File)) {
-      setIsParsing(false);
-      return;
-    }
-    
-    console.log("Parsing file as fallback - this should only happen if visualization data isn't available");
-    if (file.name.endsWith('.csv')) {
-      Papa.parse(file, { 
-        header: true, 
-        dynamicTyping: true, 
-        complete: (res) => {
-          const parsedData = res.data as any[];
-          setRawRows(parsedData);
-          
-          // Also update columns from parsed file if needed
-          if (columns.length === 0) {
-            const fileColumns = Object.keys(parsedData[0] || {});
-            setColumns(fileColumns);
-          }
-          setIsParsing(false);
-        } 
-      });
-    } else if (file.name.endsWith('.json')) {
-      const reader = new FileReader();
-      reader.onload = (e) => {
-        try {
-          const json = JSON.parse(e.target?.result as string);
-          setRawRows(Array.isArray(json) ? json : json.data || []);
-        } catch {}
-        setIsParsing(false);
-      };
-      reader.readAsText(file);
-    }
-  }, [data.data_import, data.file, data.visualization]);
+  }, [data.visualization]);
 
   // Raw imported or processed rows for 'Before' plot
   const beforeRows: any[] = rawRows
@@ -971,215 +927,46 @@ export default function DataPreprocessing({ data, onComplete }: { data: any; onC
       {/* Encoding Preview Section */}
       {processedData && selectedOperations.includes("encode") && renderEncodingPreview()}
 
-      {/* Time Series Comparison Section */}
+      {/* Time Series Comparison: show only after preprocessing has run */}
       {(Object.keys(beforeSeriesImages).length > 0 || Object.keys(afterSeriesImages).length > 0) && (
-        <Card className="mt-4 hover:shadow-md transition-shadow duration-300 border-blue-100">
-          <CardContent className="pt-6">
-            <h3 className="text-lg font-semibold mb-4 text-blue-800 flex items-center border-b pb-3">
-              <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="mr-2">
-                <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline>
-              </svg>
-              Time Series Comparison
-            </h3>
-            
-            {selectedColumns.length > 0 && (
-              <div className="mb-4 p-4 bg-blue-50 rounded-md border border-blue-100 shadow-sm">
-                <div className="flex items-start space-x-3">
-                  <div className="text-blue-600 mt-0.5 bg-blue-100 p-1 rounded-full">
-                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                      <circle cx="12" cy="12" r="10"></circle>
-                      <line x1="12" y1="8" x2="12" y2="12"></line>
-                      <line x1="12" y1="16" x2="12.01" y2="16"></line>
-                    </svg>
-                  </div>
-                  <div className="flex-1">
-                    <p className="text-sm text-blue-800 font-medium mb-2">
-                      Selected channels for visualization:
-                    </p>
-                    <div className="flex flex-wrap gap-1.5 mt-1">
-                      {selectedColumns.map(col => (
-                        <span key={col} className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800 border border-blue-200">
-                          {col}
-                        </span>
-                      ))}
-                    </div>
-                    {Object.keys(beforeSeriesImages).length === 0 && selectedColumns.includes('ch1') && (
-                      <div className="mt-3 p-2.5 bg-amber-50 rounded-md border border-amber-200">
-                        <p className="text-xs text-amber-800 flex items-center">
-                          <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="mr-1.5">
-                            <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path>
-                            <line x1="12" y1="9" x2="12" y2="13"></line>
-                            <line x1="12" y1="17" x2="12.01" y2="17"></line>
-                          </svg>
-                          <strong>Note:</strong> Some channels might not appear in the "Before" plot if they aren't present in the raw data or have a different naming format.
-                        </p>
-                      </div>
-                    )}
-                  </div>
+        <div className="mt-4 space-y-6">
+          {selectedColumns.map((ch) => (
+            <div key={ch} className="grid grid-cols-2 gap-4">
+              {/* Before plot */}
+              <div className="border rounded-lg overflow-hidden bg-white shadow-sm">
+                <div className="bg-gray-100 px-3 py-1.5 border-b flex items-center">
+                  <p className="text-sm font-medium text-gray-700">{ch} (Original)</p>
                 </div>
-              </div>
-            )}
-
-            {/* Before Preprocessing section */}
-            <div className="mb-6">
-              <h4 className="text-sm font-semibold mb-3 border-b pb-2 flex items-center text-gray-800">
-                Before Preprocessing
-                <span className="ml-auto text-xs text-gray-500 bg-gray-100 px-2 py-1 rounded-full">Raw Data</span>
-              </h4>
-              {Object.keys(beforeSeriesImages).length > 0 ? (
-                // Filter to only show selected channels
-                Object.entries(beforeSeriesImages)
-                  .filter(([ch]) => selectedColumns.some(selected => 
-                    ch.toLowerCase() === selected.toLowerCase() || 
-                    ch.toLowerCase().includes(selected.toLowerCase()) ||
-                    selected.toLowerCase().includes(ch.toLowerCase())
-                  ))
-                  .map(([ch, img]) => (
-                    <div key={ch} className="mb-4 border rounded-lg overflow-hidden bg-white shadow-sm">
-                      <div className="bg-gray-100 px-3 py-1.5 border-b flex items-center">
-                        <p className="text-sm font-medium text-gray-700">
-                          {/* Show channel name, not data value */}
-                          {selectedColumns.find(selected => 
-                            ch.toLowerCase() === selected.toLowerCase() || 
-                            ch.toLowerCase().includes(selected.toLowerCase()) ||
-                            selected.toLowerCase().includes(ch.toLowerCase())
-                          ) || ch}
-                        </p>
-                        <span className="ml-auto text-xs text-gray-500 bg-white px-2 py-0.5 rounded-full border border-gray-200">Original Signal</span>
-                      </div>
-                      <div className="p-2">
-                        <img 
-                          src={`data:image/png;base64,${img}`} 
-                          alt={`Before ${ch}`}
-                          className="w-full h-auto"
-                        />
-                      </div>
-                    </div>
-                  ))
-              ) : (
-                <div className="p-6 bg-white rounded-lg border text-center">
-                  <div className="text-gray-400 mb-3">
-                    <svg xmlns="http://www.w3.org/2000/svg" width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className="mx-auto">
-                      <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline>
-                    </svg>
-                  </div>
-                  <p className="text-sm text-gray-600 mb-2">No "Before" plots available</p>
-                  <p className="text-xs text-gray-500">Select channels and run preprocessing to generate plots</p>
-                  
-                  {selectedColumns.includes('ch1') && (
-                    <div className="mt-4 p-3 bg-amber-50 rounded-lg border border-amber-200 text-left">
-                      <div className="flex items-start">
-                        <div className="text-amber-500 mt-0.5 mr-2 bg-amber-100 p-1 rounded-full">
-                          <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                            <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path>
-                            <line x1="12" y1="9" x2="12" y2="13"></line>
-                            <line x1="12" y1="17" x2="12.01" y2="17"></line>
-                          </svg>
-                        </div>
-                        <div>
-                          <p className="text-sm font-medium text-amber-800 mb-1">
-                            "Before" plot for channel "ch1" might be missing because:
-                          </p>
-                          <ul className="text-xs text-amber-700 list-disc pl-4 space-y-1">
-                            <li>The channel name in raw data might differ from selection</li>
-                            <li>The data might need additional preprocessing to display properly</li>
-                            <li>Channel naming format might vary (e.g., "ch1" vs "Channel1")</li>
-                          </ul>
-                          <p className="text-xs text-amber-600 mt-2 italic">Try running with custom methods to improve channel matching</p>
-                        </div>
-                      </div>
-                    </div>
+                <div className="p-2">
+                  {beforeSeriesImages[ch] && (
+                    <img
+                      src={`data:image/png;base64,${beforeSeriesImages[ch]}`}
+                      alt={`Before ${ch}`}
+                      className="w-full h-auto"
+                    />
                   )}
                 </div>
-              )}
-            </div>
-            
-            {/* After Preprocessing */}
-            <div className="border rounded-lg p-4 bg-gray-50 shadow-sm transition-shadow hover:shadow-md">
-              <h4 className="text-sm font-semibold mb-3 border-b pb-2 flex items-center text-green-800">
-                <span className="bg-green-100 text-green-700 rounded-full w-6 h-6 inline-flex items-center justify-center mr-2 text-xs">
-                  <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/>
-                  </svg>
-                </span>
-                After Preprocessing
-                <span className="ml-auto text-xs text-green-600 bg-green-50 px-2 py-1 rounded-full border border-green-100">Processed Data</span>
-              </h4>
-              {Object.keys(afterSeriesImages).length > 0 ? (
-                // Display selected channels or all if no match
-                (() => {
-                  const allEntries = Object.entries(afterSeriesImages);
-                  const filteredEntries = allEntries.filter(([ch]) =>
-                    selectedColumns.some(selected =>
-                      ch.toLowerCase() === selected.toLowerCase() ||
-                      ch.toLowerCase().includes(selected.toLowerCase()) ||
-                      selected.toLowerCase().includes(ch.toLowerCase())
-                    )
-                  );
-                  const entriesToShow = filteredEntries.length > 0 ? filteredEntries : allEntries;
-                  return entriesToShow.map(([ch, img]) => (
-                    <div key={ch} className="mb-4 border rounded-lg overflow-hidden bg-white shadow-sm">
-                      <div className="bg-green-50 px-3 py-1.5 border-b flex items-center">
-                        <p className="text-sm font-medium text-gray-700">
-                          {/* Show channel name, not data value */}
-                          {selectedColumns.find(selected => 
-                            ch.toLowerCase() === selected.toLowerCase() || 
-                            ch.toLowerCase().includes(selected.toLowerCase()) ||
-                            selected.toLowerCase().includes(ch.toLowerCase())
-                          ) || ch}
-                        </p>
-                        <span className="ml-auto text-xs text-green-600 bg-white px-2 py-0.5 rounded-full border border-green-100">Processed Signal</span>
-                      </div>
-                      <div className="p-2">
-                        <img 
-                          src={`data:image/png;base64,${img}`} 
-                          alt={`After ${ch}`}
-                          className="w-full h-auto"
-                        />
-                      </div>
-                    </div>
-                  ));
-                })()
-              ) : (
-                <div className="p-6 bg-white rounded-lg border text-center">
-                  <div className="text-gray-400 mb-3">
-                    <svg xmlns="http://www.w3.org/2000/svg" width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className="mx-auto">
-                      <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline>
-                    </svg>
-                  </div>
-                  <p className="text-sm text-gray-600 mb-2">No "After" plots available</p>
-                  <p className="text-xs text-gray-500 mb-3">Run preprocessing to generate plots</p>
-                  
-                  <Button 
-                    size="sm" 
-                    variant="outline" 
-                    className="text-xs border-green-200 text-green-600 hover:bg-green-50"
-                    onClick={handleRun}
-                    disabled={isLoading}
-                  >
-                    {isLoading ? (
-                      <>
-                        <svg className="animate-spin -ml-1 mr-2 h-4 w-4 text-green-600" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                        </svg>
-                        Processing...
-                      </>
-                    ) : (
-                      <>
-                        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="mr-1">
-                          <polygon points="5 3 19 12 5 21 5 3"></polygon>
-                        </svg>
-                        Run Preprocessing
-                      </>
-                    )}
-                  </Button>
+              </div>
+              {/* After plot */}
+              <div className="border rounded-lg overflow-hidden bg-white shadow-sm">
+                <div className="bg-gray-100 px-3 py-1.5 border-b flex items-center">
+                  <p className="text-sm font-medium text-green-700">{ch} (Processed)</p>
                 </div>
-              )}
+                <div className="p-2">
+                  {afterSeriesImages[ch] && (
+                    <img
+                      src={`data:image/png;base64,${afterSeriesImages[ch]}`}
+                      alt={`After ${ch}`}
+                      className="w-full h-auto"
+                    />
+                  )}
+                </div>
+              </div>
             </div>
-          </CardContent>
-        </Card>
+          ))}
+        </div>
       )}
+
       {/* Continue button row */}
       <div className="flex justify-end gap-3 mt-6">
         <Button 
