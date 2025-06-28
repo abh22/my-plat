@@ -1,4 +1,4 @@
-from fastapi import FastAPI, UploadFile, Form
+from fastapi import FastAPI, UploadFile, Form, File
 from fastapi.middleware.cors import CORSMiddleware
 import pandas as pd
 import numpy as np
@@ -11,11 +11,9 @@ from sklearn.metrics import silhouette_score, calinski_harabasz_score, davies_bo
 from sklearn.decomposition import PCA
 from sklearn.manifold import TSNE
 from sklearn.preprocessing import StandardScaler
-import matplotlib.pyplot as plt
-from io import BytesIO
-import base64
 from sklearn.svm import SVC
 from sklearn.linear_model import LogisticRegression
+from typing import Union
 
 
 app = FastAPI()
@@ -32,7 +30,7 @@ app.add_middleware(
 @app.post("/classification")
 async def classify_features(
     model_type: str = Form(...),
-    features: UploadFile = Form(...),
+    features: UploadFile = File(...),
     target: str = Form(None)
 ):
     try:
@@ -75,42 +73,38 @@ async def classify_features(
         
         # Select numeric columns
         numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
-        # Decide mode: supervised if target provided and exists, else unsupervised clustering
-        if target_column and target_column in df.columns:
+        # Decide mode based on model_type: supervised if a supervised model is selected, else unsupervised clustering
+        supervised_models = ['random_forest', 'svm', 'logistic_regression', 'logistic']
+        if model_type in supervised_models:
+            # Ensure target column is provided and exists in the data
+            if not target_column or target_column not in df.columns:
+                return {'error': f"Target column '{target_column}' not found in data"}
             # Supervised classification
             X = df[numeric_cols].copy()
             y = df[target_column]
-            # Drop target from features if present
             if target_column in X.columns:
                 X = X.drop(columns=[target_column])
-            # Scale
             scaler = StandardScaler()
             X_scaled = scaler.fit_transform(X)
-            # Train/test split
             X_train, X_test, y_train, y_test = train_test_split(
-                X_scaled, y, test_size=0.3, random_state=42, stratify=y if len(y.unique())>1 else None
+                X_scaled, y, test_size=0.3, random_state=42,
+                stratify=y if len(y.unique()) > 1 else None
             )
-            # Select model based on model_type
             if model_type == 'svm':
                 model = SVC(kernel='rbf', probability=True, random_state=42)
             elif model_type in ['logistic_regression', 'logistic']:
                 model = LogisticRegression(max_iter=1000, random_state=42)
             else:
-                # Default to Random Forest
                 model = RandomForestClassifier(n_estimators=100, random_state=42)
-            # Fit supervised model
             model.fit(X_train, y_train)
-            # Predict and evaluate
             y_pred = model.predict(X_test)
-            # Compute metrics
             metrics = {
                 'accuracy': accuracy_score(y_test, y_pred),
                 'precision': precision_score(y_test, y_pred, average='weighted', zero_division=0),
                 'recall': recall_score(y_test, y_pred, average='weighted', zero_division=0),
                 'f1_score': f1_score(y_test, y_pred, average='weighted', zero_division=0)
             }
-            # Feature importance or coefficients
-            feat_imp: Dict[str, float] = {}
+            feat_imp: Dict[str, Any] = {}
             if hasattr(model, 'feature_importances_'):
                 imps = model.feature_importances_
                 feat_imp = {col: float(imps[i]) for i, col in enumerate(X.columns)}
@@ -127,15 +121,33 @@ async def classify_features(
         X = df[numeric_cols]
         print(f"Using {len(numeric_cols)} numeric feature columns for clustering")
         # Default to KMeans clustering
-        model = KMeans(n_clusters=3, random_state=42)
+        num_clusters = 3
+        model = KMeans(n_clusters=num_clusters, random_state=42)
         cluster_labels = model.fit_predict(X)
+        # Compute 2D PCA coordinates for visualization
+        scaler_vis = StandardScaler()
+        X_scaled_vis = scaler_vis.fit_transform(X)
+        pca_vis = PCA(n_components=2)
+        coords = pca_vis.fit_transform(X_scaled_vis)
+        pca_coords = coords.tolist()
+        # Compute cluster distribution
+        from collections import Counter
+        # Count labels and convert numpy ints to native Python types for JSON serialization
+        raw_counts = Counter(cluster_labels)
+        cluster_distribution = { str(int(k)): int(v) for k, v in raw_counts.items() }
         df['cluster'] = cluster_labels
         # Compute clustering metrics
-        metrics = {
-            'silhouette_score': silhouette_score(X, cluster_labels),
-            'calinski_harabasz_score': calinski_harabasz_score(X, cluster_labels),
-            'davies_bouldin_score': davies_bouldin_score(X, cluster_labels)
-        }
+        silhouette = silhouette_score(X, cluster_labels) if num_clusters > 1 else None
+        calinski = calinski_harabasz_score(X, cluster_labels) if num_clusters > 1 else None
+        davies = davies_bouldin_score(X, cluster_labels) if num_clusters > 1 else None
+        # Compute explained variance (1 - within_ss/total_ss) for KMeans if available
+        explained_variance = None
+        if hasattr(model, 'inertia_'):
+            # Sum all squared deviations across all observations and features
+            total_ss = ((X - X.mean()) ** 2).to_numpy().sum()
+            within_ss = model.inertia_
+            if total_ss > 0:
+                explained_variance = float(1 - within_ss / total_ss)
         # For KMeans, we can provide cluster centers
         cluster_centers = {}
         if hasattr(model, 'cluster_centers_'):
@@ -143,9 +155,18 @@ async def classify_features(
             cluster_centers = {f'center_{i}': centers[i].tolist() for i in range(len(centers))}
         return {
             'mode': 'unsupervised',
-            'model': 'kmeans',  # Indicate default model used
-            'metrics': metrics,
-            'cluster_centers': cluster_centers
+            'model': model_type,
+            'numClusters': num_clusters,
+            'cluster_distribution': cluster_distribution,
+            'metrics': {
+                'silhouette': silhouette,
+                'calinskiHarabasz': calinski,
+                'daviesBouldin': davies
+            },
+            'explainedVariance': explained_variance,
+            'cluster_centers': cluster_centers,
+            'labels': [int(l) for l in cluster_labels],
+            'pca_coords': pca_coords
         }
     except Exception as e:
         return {"error": str(e)}

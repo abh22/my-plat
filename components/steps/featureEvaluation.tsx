@@ -21,8 +21,10 @@ interface EvaluationProps {
     feature_extraction?: {
       featureExtraction?: any[];
       featureNameMap?: Record<string, string[]>;
-      processedData?: any[]; // <-- Add this line to fix the error
+      processedData?: any[]; // The actual extracted feature records
     };
+    extractedFeatures?: any[]; // Could be preview format or feature records
+    featureExtraction?: any[]; // Alternative path for feature data
     [key: string]: any;
   };
   onComplete?: (data: any) => void;
@@ -157,19 +159,50 @@ const FeatureEvaluation = ({ data, onComplete }: EvaluationProps) => {
  const handleRun = async () => {
   console.log('Evaluation step received data:', data);
   
-  // Extract features from the data structure
-  const featureData: any[] =
-    data?.extractedFeatures ||
-    data?.feature_extraction?.featureExtraction ||
-    data?.featureExtraction ||
-    [];
-
-  console.log('Raw feature data for evaluation:', featureData);
-
-  if (featureData.length === 0) {
-    setError("No feature data available. Please complete the Feature Extraction step first.");
-    return;
+  // Extract processed features from the extraction step - prioritize processedData over preview features
+  const extractedData = data?.extractedFeatures || data?.feature_extraction?.featureExtraction || data?.featureExtraction || [];
+  
+  // If extractedData is an array of {feature, value} objects (preview format), 
+  // we need to use the processedData instead which contains the actual feature records
+  let featureData: any[] = [];
+  
+  if (data?.feature_extraction?.processedData && Array.isArray(data.feature_extraction.processedData)) {
+    // Use the processedData which contains the actual extracted feature records
+    featureData = data.feature_extraction.processedData;
+    console.log('Using processedData from feature extraction:', featureData.length, 'records');
+  } else if (Array.isArray(extractedData) && extractedData.length > 0) {
+    // Check if this is preview format [{feature: "name", value: val}, ...] 
+    // or actual feature records [{feat1: val1, feat2: val2, ...}, ...]
+    const firstItem = extractedData[0];
+    if (firstItem && typeof firstItem === 'object' && 'feature' in firstItem && 'value' in firstItem) {
+      // This is preview format - we need to reconstruct feature records
+      // Group by record index if available, otherwise create single record
+      const featureRecord: Record<string, any> = {};
+      extractedData.forEach((item: any) => {
+        if (item.feature && item.value !== undefined) {
+          featureRecord[item.feature] = item.value;
+        }
+      });
+      featureData = [featureRecord];
+      console.log('Converted preview format to feature records:', featureData);
+    } else {
+      // This should already be in the correct format
+      featureData = extractedData;
+      console.log('Using extracted data as feature records:', featureData.length, 'records');
+    }
   }
+
+    console.log('Final feature data for evaluation:', featureData);
+    console.log('Dataset info for evaluation:', {
+      totalRecords: featureData.length,
+      featureColumns: featureData[0] ? Object.keys(featureData[0]) : [],
+      sampleRecord: featureData[0]
+    });
+
+    if (featureData.length === 0) {
+      setError("No feature data available. Please complete the Feature Extraction step first.");
+      return;
+    }
 
   if (selectedMethods.length === 0) {
     setError("Please select at least one evaluation method.");
@@ -180,10 +213,16 @@ const FeatureEvaluation = ({ data, onComplete }: EvaluationProps) => {
   setError(null);
   setSuccess(null);
 
+  // Show info about dataset being processed
+  const recordCount = featureData.length;
+  const featureCount = featureData[0] ? Object.keys(featureData[0]).length : 0;
+  console.log(`🔄 Starting evaluation of ${featureCount} features across ${recordCount.toLocaleString()} records...`);
+
   try {
-    // Use the extractedFeatures array directly (each entry should be a dict of featureName: value)
+    // Use the processed feature records for evaluation
     const featureRecords: Record<string, any>[] = featureData as Record<string, any>[];
-    console.log('Using feature records for evaluation:', featureRecords.length, 'rows');
+    console.log('Sending feature records for evaluation:', featureRecords.length, 'rows');
+    console.log('Sample feature record:', featureRecords[0]);
     const payload = { features: featureRecords };
 
     const formData = new FormData();
@@ -194,6 +233,8 @@ const FeatureEvaluation = ({ data, onComplete }: EvaluationProps) => {
 
     console.log("Sending evaluation request with methods:", selectedMethods);
     console.log("Payload structure:", payload);
+    console.log("Number of feature records:", featureRecords.length);
+    console.log("Feature names in first record:", Object.keys(featureRecords[0] || {}));
 
     const response = await fetch("http://localhost:8002/evaluation", {
       method: "POST",
@@ -207,7 +248,15 @@ const FeatureEvaluation = ({ data, onComplete }: EvaluationProps) => {
       setError(`Error from server: ${result.error}`);
     } else if (result.rankedFeatures && result.rankedFeatures.length > 0) {
       setRankedFeatures(result.rankedFeatures);
-      setSuccess("Feature evaluation completed successfully.");
+      
+      // Create enhanced success message with dataset information
+      const recordCount = featureRecords.length;
+      const featureCount = result.rankedFeatures.length;
+      const featureNames = Object.keys(featureRecords[0] || {});
+      
+      let successMessage = `Feature evaluation completed successfully - Analyzed ${featureCount} features across ${recordCount.toLocaleString()} records`;
+      
+      setSuccess(successMessage);
     } else {
       setError("No feature scores were returned from the server.");
     }
@@ -268,9 +317,25 @@ const FeatureEvaluation = ({ data, onComplete }: EvaluationProps) => {
           </div>
           <div className="flex-1">
             <AlertTitle className="text-green-800 font-semibold mb-2 flex items-center">
-              <span className="mr-2">{success}</span>
-              <span className="bg-green-100 text-green-700 text-xs px-2 py-0.5 rounded-full">Success</span>
+              <span className="mr-2">Feature Evaluation Completed</span>
+              <span className="bg-green-100 text-green-700 text-xs px-2 py-0.5 rounded-full">Full Dataset</span>
             </AlertTitle>
+            
+            <AlertDescription className="text-green-700 text-sm mb-2">
+              <span className="font-medium">✅ Successfully processed complete dataset: </span>
+              {(() => {
+                // Get dataset info from data
+                const featureData = data?.feature_extraction?.processedData || [];
+                const recordCount = featureData.length;
+                const featureCount = rankedFeatures.length;
+                
+                return (
+                  <span className="bg-white text-green-800 px-2 py-1 rounded text-xs font-mono">
+                    {recordCount.toLocaleString()} records × {featureCount} features evaluated
+                  </span>
+                );
+              })()}
+            </AlertDescription>
             
             {selectedMethods.length > 0 && (
               <AlertDescription className="text-green-700 text-sm mb-2">
@@ -290,11 +355,56 @@ const FeatureEvaluation = ({ data, onComplete }: EvaluationProps) => {
                 <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path>
                 <polyline points="22 4 12 14.01 9 11.01"></polyline>
               </svg>
-              {selectedFeatures.length} features selected for analysis
+              {selectedFeatures.length} features selected for next step
             </div>
           </div>
         </Alert>
-      )}      {/* Method selection card */}      <Card className="p-6 hover:shadow-sm transition-shadow duration-200 border-l-4 border-l-amber-400">
+      )}
+
+      {loading && (
+        <Alert variant="default" className="bg-blue-50 border-blue-200 max-w-5xl w-full flex items-start space-x-3 shadow-sm mb-6">
+          <div className="bg-blue-100 p-1 rounded-full">
+            <Loader2 className="h-5 w-5 text-blue-600 animate-spin" />
+          </div>
+          <div className="flex-1">
+            <AlertTitle className="text-blue-800 font-semibold mb-2 flex items-center">
+              <span className="mr-2">Processing Full Dataset</span>
+              <span className="bg-blue-100 text-blue-700 text-xs px-2 py-0.5 rounded-full">In Progress</span>
+            </AlertTitle>
+            
+            <AlertDescription className="text-blue-700 text-sm">
+              <span className="font-medium">📊 Evaluating features across complete dataset: </span>
+              {(() => {
+                const featureData = data?.feature_extraction?.processedData || [];
+                const recordCount = featureData.length;
+                const featureCount = featureData[0] ? Object.keys(featureData[0]).length : 0;
+                
+                return recordCount > 0 ? (
+                  <span className="bg-white text-blue-800 px-2 py-1 rounded text-xs font-mono">
+                    {recordCount.toLocaleString()} records × {featureCount} features
+                  </span>
+                ) : 'Processing...';
+              })()}
+            </AlertDescription>
+            
+            <div className="mt-2 text-xs text-blue-600 flex items-center">
+              <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="mr-1">
+                <path d="M12 2v4"></path>
+                <path d="m16.24 7.76-2.12 2.12"></path>
+                <path d="M20 12h-4"></path>
+                <path d="m16.24 16.24-2.12-2.12"></path>
+                <path d="M12 20v-4"></path>
+                <path d="m7.76 16.24 2.12-2.12"></path>
+                <path d="M4 12h4"></path>
+                <path d="m7.76 7.76 2.12 2.12"></path>
+              </svg>
+              This may take a few moments for large datasets
+            </div>
+          </div>
+        </Alert>
+      )}
+
+      {/* Method selection card */}      <Card className="p-6 hover:shadow-sm transition-shadow duration-200 border-l-4 border-l-amber-400">
         <h3 className="text-base font-semibold mb-4 flex items-center">
           <span className="bg-amber-100 text-amber-700 rounded-full w-6 h-6 inline-flex items-center justify-center mr-2 text-xs">1</span>
           Select Evaluation Methods

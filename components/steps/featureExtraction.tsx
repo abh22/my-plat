@@ -51,6 +51,7 @@ export default function FeatureExtraction({ data, onComplete }: { data: any; onC
   const [samplingRate, setSamplingRate] = useState("2500");  // Sampling rate for frequency methods (default 2500 Hz)
   const [windowSize, setWindowSize] = useState("256");  // Window length (samples) for sliding-window AR extraction
   const [windowStep, setWindowStep] = useState("128");  // Window step size (samples) for AR extraction
+  const [trialLength, setTrialLength] = useState("10000");  // Trial length (samples) for time-domain feature segmentation
   // New state for custom methods
   const [customMethods, setCustomMethods] = useState<Array<{ name: string; filename: string; description: string; category: string }>>([]);
   // New state for AR feature plots
@@ -167,6 +168,7 @@ export default function FeatureExtraction({ data, onComplete }: { data: any; onC
         sampling_rate: Number.parseFloat(samplingRate),  // pass sampling rate to backend
         windowSize: Number.parseInt(windowSize),  // windowing parameters for AR
         windowStep: Number.parseInt(windowStep),
+        trial_length: Number.parseInt(trialLength),  // trial length for time-domain features
       },
     };
   
@@ -178,6 +180,10 @@ export default function FeatureExtraction({ data, onComplete }: { data: any; onC
     formData.append("file", fileBlob, "data.json");
     try {
       console.log("Starting feature extraction API request with config:", config);
+      console.log("Selected methods:", selectedMethods);
+      console.log("Selected channels:", selectedChannels);
+      console.log("Data for extraction sample:", dataForExtraction[0]);
+      
       const res = await fetch("http://localhost:8001/extraction", {
         method: "POST",
         body: formData,
@@ -197,19 +203,35 @@ export default function FeatureExtraction({ data, onComplete }: { data: any; onC
   
       const result = await res.json();
       console.log("API Response:", result);
-      // Debug: log raw preview from backend
+      // Debug: log what we received from backend
       console.log("Backend preview:", result.preview);
+      console.log("Backend processedData:", result.processedData);
+      console.log("Backend featureNameMapping:", result.featureNameMapping);
 
       if (result && result.preview) {
         // Save full processed data or fallback to normalized preview
-        setProcessedData(result.processedData);
+        const backendProcessedData = result.processedData || [];
+        setProcessedData(backendProcessedData);
         setFeatureNameMapping(result.featureNameMapping || {});
+        
+        // Debug: log what we got from backend
+        console.log("Backend processedData:", backendProcessedData);
+        console.log("Backend processedData length:", backendProcessedData.length);
+        console.log("Sample backend processedData record:", backendProcessedData[0]);
+        
         // Save plots and stats from backend
         setPlots(result.plots || {});
         setStats(result.stats || {});
         // Save AR feature plots if provided
         setArPlots(result.arPlots || {});
-        // Normalize preview items into {feature,value}
+        
+        // Save additional custom method plots
+        setFreqPlots(result.freqPlots || {});
+        setTdPlots(result.tdPlots || {});
+        setEntPlots(result.entPlots || {});
+        setWavPlots(result.wavPlots || {});
+        
+        // Normalize preview items into {feature,value} for UI display
         const normalized = (result.preview as any[]).map(item => {
           if (item && typeof item === 'object' && 'feature' in item && 'value' in item) {
             return { feature: item.feature, value: item.value };
@@ -224,11 +246,26 @@ export default function FeatureExtraction({ data, onComplete }: { data: any; onC
           }
           return { feature: String(item), value: '' };
         });
+        
         // Debug: log normalized preview array
         console.log("Normalized preview:", normalized);
+        
         if (normalized.length > 0) {
           setExtractedFeatures(normalized);
-          setResultMessage("Features extracted successfully");
+          
+          // Create detailed success message with dataset size information
+          const recordCount = backendProcessedData.length;
+          const featureCount = backendProcessedData[0] ? Object.keys(backendProcessedData[0]).length : 0;
+          
+          let successMessage = "Features extracted successfully";
+          if (recordCount > 0) {
+            successMessage += ` - Processing complete dataset: ${recordCount.toLocaleString()} records with ${featureCount} features`;
+            if (recordCount > 1000) {
+              successMessage += ` (Note: UI shows preview of first ${Math.min(5, normalized.length)} features, but evaluation will use all ${recordCount.toLocaleString()} records)`;
+            }
+          }
+          
+          setResultMessage(successMessage);
           setMessageType("success");
         } else {
           setExtractedFeatures([]);
@@ -248,19 +285,101 @@ export default function FeatureExtraction({ data, onComplete }: { data: any; onC
     }
   };
 const handleSubmit = () => {
-  if (processedData && processedData.length > 0) {
-    console.log("Passing full windowed AR features to evaluation:", processedData.length, "records");
+  console.log("handleSubmit called");
+  console.log("processedData:", processedData);
+  console.log("processedData length:", processedData?.length);
+  console.log("extractedFeatures:", extractedFeatures);
+  console.log("extractedFeatures length:", extractedFeatures?.length);
+
+  // Check if we have valid processed data (extracted features)
+  if (processedData && Array.isArray(processedData) && processedData.length > 0) {
+    // Verify that processedData contains feature records, not raw channel data
+    const firstRecord = processedData[0];
+    console.log("First processed data record:", firstRecord);
+    console.log("Keys in first record:", Object.keys(firstRecord || {}));
     
-    // Skip preview; use the complete processedData array of windowed feature records
-    onComplete({
-      extractedFeatures: processedData,
-      featureExtraction: processedData,
-      featureNameMap: featureNameMapping
-    });
+    // Check if this looks like extracted features (not raw channel data)
+    const keys = Object.keys(firstRecord || {});
+    
+    // General approach: check if the data structure indicates extracted features
+    const hasFeatureLikeKeys = keys.length > 0 && (
+      // Method 1: Check if keys contain underscores (most feature extraction creates composite names)
+      keys.some(key => key.includes('_')) ||
+      
+      // Method 2: Check if we have fewer keys than available channels (dimension reduction)
+      (selectedChannels.length > 0 && keys.length < selectedChannels.length) ||
+      
+      // Method 3: Check if keys don't match the original channel names exactly
+      (selectedChannels.length > 0 && !keys.every(key => selectedChannels.includes(key))) ||
+      
+      // Method 4: Check if any key contains numbers (like PCA_Component_1, ICA1, etc.)
+      keys.some(key => /\d/.test(key)) ||
+      
+      // Method 5: Check if keys look like transformed/computed features (not just simple channel names)
+      keys.some(key => 
+        key.length > 10 || // Longer names often indicate computed features
+        key.includes('component') || 
+        key.includes('Component') ||
+        /^[A-Z]+\d*$/.test(key) // Pattern like PCA1, ICA2, SVD1, etc.
+      )
+    );
+    
+    // Additional check: if we have the same number of keys as channels, 
+    // but the values look very different from typical sensor data
+    let valuesLookProcessed = false;
+    if (keys.length === selectedChannels.length && selectedChannels.length > 0) {
+      const values = Object.values(firstRecord || {});
+      if (values.length > 0 && values.every(v => typeof v === 'number')) {
+        // Check if values are in a very different range than typical sensor data
+        // This is a heuristic - processed features often have different scales
+        const numericValues = values as number[];
+        const range = Math.max(...numericValues) - Math.min(...numericValues);
+        const avgMagnitude = numericValues.reduce((sum, v) => sum + Math.abs(v), 0) / numericValues.length;
+        
+        // If range is very large or very small compared to typical sensor data, likely processed
+        valuesLookProcessed = range > 1000 || range < 0.01 || avgMagnitude > 1000 || avgMagnitude < 0.001;
+      }
+    }
+    
+    const finalCheck = hasFeatureLikeKeys || valuesLookProcessed;
+    
+    if (finalCheck) {
+      console.log("✅ processedData appears to contain extracted features");
+      console.log("Detection reasons:");
+      if (keys.some(key => key.includes('_'))) console.log("- Keys contain underscores (composite feature names)");
+      if (selectedChannels.length > 0 && keys.length < selectedChannels.length) console.log("- Fewer keys than channels (dimensionality reduction)");
+      if (selectedChannels.length > 0 && !keys.every(key => selectedChannels.includes(key))) console.log("- Keys don't match original channel names");
+      if (keys.some(key => /\d/.test(key))) console.log("- Keys contain numbers (transformed features)");
+      if (keys.some(key => key.length > 10 || key.includes('component') || key.includes('Component') || /^[A-Z]+\d*$/.test(key))) console.log("- Keys look like computed features");
+      if (valuesLookProcessed) console.log("- Values appear to be in processed range");
+      console.log("Keys found:", keys);
+      console.log("Passing extracted features to evaluation:", processedData.length, "records");
+      
+      // Pass both the processedData and the extracted features for compatibility
+      onComplete({
+        extractedFeatures: processedData,
+        featureExtraction: processedData,
+        processedData: processedData, // Explicitly pass processedData for evaluation step
+        featureNameMap: featureNameMapping
+      });
+    } else {
+      console.warn("❌ processedData appears to contain raw channel data, not extracted features");
+      console.log("All keys in first record:", keys);
+      console.log("Selected channels:", selectedChannels);
+      console.log("Detection failed because:");
+      console.log("- Keys don't contain underscores:", !keys.some(key => key.includes('_')));
+      console.log("- Same number of keys as channels:", selectedChannels.length > 0 && keys.length === selectedChannels.length);
+      console.log("- Keys match channel names:", selectedChannels.length > 0 && keys.every(key => selectedChannels.includes(key)));
+      console.log("- No numeric patterns in keys:", !keys.some(key => /\d/.test(key)));
+      console.log("- Values don't look processed:", !valuesLookProcessed);
+      
+      setResultMessage("Processed data contains raw channels instead of extracted features. Please check your feature extraction methods.");
+      setMessageType("error");
+    }
   } else {
+    console.error("No valid processed data available");
     setResultMessage("Please run feature extraction before continuing.");
-    setMessageType("error");
-  }
+    setMessageType("error");    }
 };
 
 
@@ -390,14 +509,49 @@ const handleSubmit = () => {
     if (!resultMessage) return null;
 
     if (messageType === "success") {
+      const recordCount = processedData?.length || 0;
+      const featureCount = processedData?.[0] ? Object.keys(processedData[0]).length : 0;
+      
       return (
         <div className="flex justify-center mb-6">
           <Alert
             variant="default"
-            className="bg-green-50 border-green-200 max-w-fit inline-block flex items-center space-x-2"
+            className="bg-green-50 border-green-200 max-w-4xl w-full flex items-start space-x-3 shadow-sm"
           >
-            <CheckCircle className="h-4 w-4 text-green-600" />
-            <AlertTitle className="text-green-800">{resultMessage}</AlertTitle>
+            <div className="bg-green-100 p-1 rounded-full">
+              <CheckCircle className="h-5 w-5 text-green-600" />
+            </div>
+            <div className="flex-1">
+              <AlertTitle className="text-green-800 font-semibold mb-2 flex items-center">
+                <span className="mr-2">Feature Extraction Completed Successfully</span>
+                <span className="bg-green-100 text-green-700 text-xs px-2 py-0.5 rounded-full">Complete Dataset</span>
+              </AlertTitle>
+              
+              {recordCount > 0 && (
+                <AlertDescription className="text-green-700 text-sm mb-2">
+                  <span className="font-medium">Dataset processed: </span>
+                  <span className="bg-white text-green-800 px-2 py-1 rounded text-xs font-mono">
+                    {recordCount.toLocaleString()} records × {featureCount} features
+                  </span>
+                </AlertDescription>
+              )}
+              
+              {recordCount > 1000 && (
+                <AlertDescription className="text-green-700 text-sm">
+                  <span className="font-medium">📊 Full dataset ready: </span>
+                  While the preview above shows only the first few feature values for display purposes, 
+                  the complete dataset with all {recordCount.toLocaleString()} records will be used in the next evaluation step.
+                </AlertDescription>
+              )}
+              
+              <div className="mt-2 text-xs text-green-600 flex items-center">
+                <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="mr-1">
+                  <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path>
+                  <polyline points="22 4 12 14.01 9 11.01"></polyline>
+                </svg>
+                Ready for feature evaluation
+              </div>
+            </div>
           </Alert>
         </div>
       );
@@ -623,6 +777,23 @@ const handleSubmit = () => {
                           <div className="flex items-baseline space-x-2 pl-6">
                             <Label htmlFor="windowStep" className="text-xs font-medium text-gray-700">Step Size:</Label>
                             <Input id="windowStep" type="number" value={windowStep} onChange={e => setWindowStep(e.target.value)} className="w-24" />
+                          </div>
+                        </div>
+                      )}
+                      {method.filename.toLowerCase().includes('time_domain') && selectedMethods.includes(method.filename) && (
+                        <div className="mt-2 space-y-2 pl-6">
+                          <div className="flex items-baseline space-x-2">
+                            <Label htmlFor="trialLength" className="text-xs font-medium text-gray-700">Trial Length:</Label>
+                            <Input id="trialLength" type="number" value={trialLength} onChange={e => setTrialLength(e.target.value)} className="w-24" />
+                          </div>
+                          <div className="text-xs text-gray-400 pl-0 mt-1">
+                            Samples per trial (affects number of feature records)<br/>
+                            <span className="text-xs text-gray-500">
+                              {rawRows.length > 0 && trialLength ? 
+                                `~${Math.floor(rawRows.length / Number.parseInt(trialLength || "10000"))} trials` : 
+                                'Enter trial length to see estimated trials'
+                              }
+                            </span>
                           </div>
                         </div>
                       )}

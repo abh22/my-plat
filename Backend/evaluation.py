@@ -83,11 +83,30 @@ async def evaluate_features(
         # Print a sample of feature data for debugging
         print(f"Sample feature data (first record): {feature_data[0]}")
         
+        # DEBUG: Check the actual values in the first record
+        if len(feature_data) > 0:
+            first_record = feature_data[0]
+            print("DEBUG: Detailed first record analysis:")
+            for key, val in first_record.items():
+                print(f"  Feature '{key}': value={val}, type={type(val)}")
+                if isinstance(val, (int, float)):
+                    print(f"    -> Numeric value: {val}")
+                elif val == 0 or val == 0.0:
+                    print(f"    -> WARNING: Value is zero!")
+                else:
+                    print(f"    -> Non-numeric or unusual value")
+        
         # Convert to DataFrame
         try:
             df = pd.DataFrame(feature_data)
             print(f"DataFrame columns: {df.columns.tolist()}")
             print(f"DataFrame shape (rows, cols): {df.shape}")
+            
+            # DEBUG: Check DataFrame values
+            print("DEBUG: DataFrame first few rows:")
+            print(df.head())
+            print("DEBUG: DataFrame describe:")
+            print(df.describe())
         except Exception as e:
             return {"error": f"Failed to create DataFrame: {str(e)}"}
             

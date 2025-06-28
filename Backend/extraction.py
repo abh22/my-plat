@@ -281,6 +281,8 @@ async def extraction(file: UploadFile = File(...), config: str = Form(...)):
         td_results = {}
         ent_results = {}
         wav_results = {}
+        processed_ar_records = []  # Initialize here for later use
+        processed_td_records = []  # Initialize for time-domain multi-trial records
 
         # If AR features requested, run custom AR extractor and return feature/value pairs
         if any('ar_features' in m.lower() for m in methods):
@@ -314,12 +316,7 @@ async def extraction(file: UploadFile = File(...), config: str = Form(...)):
                         windowed_feats.append(feats)
                     # Store windowed features for this channel
                     ar_results[col] = (names, windowed_feats)
-            # Add AR feature entries to preview_list (using first window only)
-            for ch, (names, windowed_feats) in ar_results.items():
-                if windowed_feats:
-                    first_feats = windowed_feats[0]
-                    for idx, name in enumerate(names):
-                        preview_list.append({"feature": f"{ch}_{name}", "value": float(first_feats[idx])})
+            # Add AR feature entries to preview_list (first window features already added above)
 
         # After AR extraction, create composite records per window combining all channels
         if ar_results:
@@ -334,15 +331,15 @@ async def extraction(file: UploadFile = File(...), config: str = Form(...)):
                     for i, name in enumerate(names):
                         record[f"{ch}_{name}"] = feats[i]
                 processed_ar_records.append(record)
-            response_processed = processed_ar_records
-            # Build preview_list entries using first window only
-            preview_list = []
+            
+            # Build preview_list entries using first window only for AR features
+            ar_preview_list = []
             if processed_ar_records:
                 first = processed_ar_records[0]
                 for feature_key, feature_val in first.items():
-                    preview_list.append({"feature": feature_key, "value": float(feature_val)})
-        else:
-            response_processed = X.to_dict(orient='records')
+                    ar_preview_list.append({"feature": feature_key, "value": float(feature_val)})
+                # Add AR preview to the main preview list
+                preview_list.extend(ar_preview_list)
 
         print(f"Feature extraction complete. Final shape: {X.shape}")
         print(f"Updated Feature Name Mapping: {featureNameMapping}")
@@ -380,8 +377,18 @@ async def extraction(file: UploadFile = File(...), config: str = Form(...)):
              # Build preview list
             preview_dom = []
             for feat, val in dom_df.to_dict(orient='records')[0].items():
-                print(f"DF feature {feat} value {val}")
-                safe_val = float(val) if not pd.isna(val) else 0.0
+                print(f"DF feature {feat} raw value {val} (type: {type(val)})")
+                # More robust value conversion
+                try:
+                    if val is None or (isinstance(val, float) and np.isnan(val)):
+                        safe_val = 0.0
+                        print(f"  -> Converted None/NaN to 0.0")
+                    else:
+                        safe_val = float(val)
+                        print(f"  -> Converted to float: {safe_val}")
+                except (ValueError, TypeError) as e:
+                    print(f"  -> Error converting {val}: {e}, defaulting to 0.0")
+                    safe_val = 0.0
                 preview_dom.append({"feature": feat, "value": safe_val})
             print(f"DF preview_dom: {preview_dom}")
              # Accumulate DF previews instead of returning early
@@ -456,17 +463,83 @@ async def extraction(file: UploadFile = File(...), config: str = Form(...)):
                 td_targets = config.get('channels', []) or numeric_features
                 td_targets = [col for col in td_targets if col in numeric_features]
                 df_input = df[td_targets].copy()
-                td_df = process_td(df_input, settings)
-                for feat, val in td_df.to_dict(orient='records')[0].items():
-                    safe_val = float(val) if not pd.isna(val) else 0.0
-                    preview_list.append({"feature": feat, "value": safe_val})
+                
+                # Add emg_columns parameter for time-domain processing
+                td_settings = settings.copy()
+                td_settings['emg_columns'] = td_targets
+                print(f"Time-domain settings: {td_settings}")
+                
+                td_df = process_td(df_input, td_settings)
+                
+                print(f"Time-domain method returned DataFrame with shape: {td_df.shape}")
+                print(f"TD columns: {list(td_df.columns)}")
+                print(f"TD trials (rows): {len(td_df)}")
+                
+                # Instead of using only first trial, use all trials to create multiple records
+                if len(td_df) > 1:
+                    # Multiple trials: convert each trial to a feature record
+                    td_records = []
+                    for trial_idx in range(len(td_df)):
+                        trial_record = {}
+                        for feat, val in td_df.iloc[trial_idx].to_dict().items():
+                            print(f"TD trial {trial_idx} feature {feat} raw value {val} (type: {type(val)})")
+                            try:
+                                if val is None or (isinstance(val, float) and np.isnan(val)):
+                                    safe_val = 0.0
+                                    print(f"  -> TD: Converted None/NaN to 0.0")
+                                else:
+                                    safe_val = float(val)
+                                    print(f"  -> TD: Converted to float: {safe_val}")
+                            except (ValueError, TypeError) as e:
+                                print(f"  -> TD: Error converting {val}: {e}, defaulting to 0.0")
+                                safe_val = 0.0
+                            trial_record[feat] = safe_val
+                        td_records.append(trial_record)
+                    
+                    # Store the multi-trial records for later use in processedData
+                    processed_td_records = td_records
+                    print(f"Created {len(td_records)} time-domain trial records")
+                    
+                    # For preview, just show features from first trial
+                    first_trial = td_records[0] if td_records else {}
+                    for feat, val in first_trial.items():
+                        preview_list.append({"feature": feat, "value": val})
+                else:
+                    # Single trial: use the original logic
+                    for feat, val in td_df.to_dict(orient='records')[0].items():
+                        print(f"TD feature {feat} raw value {val} (type: {type(val)})")
+                        try:
+                            if val is None or (isinstance(val, float) and np.isnan(val)):
+                                safe_val = 0.0
+                                print(f"  -> TD: Converted None/NaN to 0.0")
+                            else:
+                                safe_val = float(val)
+                                print(f"  -> TD: Converted to float: {safe_val}")
+                        except (ValueError, TypeError) as e:
+                            print(f"  -> TD: Error converting {val}: {e}, defaulting to 0.0")
+                            safe_val = 0.0
+                        preview_list.append({"feature": feat, "value": safe_val})
+                    processed_td_records = []  # No multi-trial records
                 # In the time-domain branch, capture results per channel for plotting
                 for col in td_targets:
                     # Extract features for this channel from first trial
                     first_row = td_df.iloc[0].to_dict()
                     channel_feats = {k: v for k, v in first_row.items() if f'_{col}_' in k}
                     names = [k.split(f'_{col}_')[-1] for k in channel_feats.keys()]
-                    values = [float(v) if not pd.isna(v) else 0.0 for v in channel_feats.values()]
+                    values = []
+                    for v in channel_feats.values():
+                        print(f"    TD channel value {v} (type: {type(v)})")
+                        try:
+                            if v is None or (isinstance(v, float) and np.isnan(v)):
+                                converted_val = 0.0
+                                print(f"      -> Channel: Converted None/NaN to 0.0")
+                            else:
+                                converted_val = float(v)
+                                print(f"      -> Channel: Converted to float: {converted_val}")
+                        except (ValueError, TypeError) as e:
+                            print(f"      -> Channel: Error converting {v}: {e}, defaulting to 0.0")
+                            converted_val = 0.0
+                        values.append(converted_val)
                     td_results[col] = (names, values)
                     for name, val in zip(names, values):
                         preview_list.append({"feature": f"{col}_{name}", "value": val})
@@ -486,7 +559,21 @@ async def extraction(file: UploadFile = File(...), config: str = Form(...)):
                 for col in ent_targets:
                     segment = df[col].fillna(df[col].mean()).values
                     feats, names = extract_ent(segment)
-                    clean_feats = [float(f) if not pd.isna(f) else 0.0 for f in feats]
+                    # More robust value conversion for entropy features
+                    clean_feats = []
+                    for f in feats:
+                        print(f"Entropy raw feature value {f} (type: {type(f)})")
+                        try:
+                            if f is None or (isinstance(f, float) and np.isnan(f)):
+                                converted_val = 0.0
+                                print(f"  -> Entropy: Converted None/NaN to 0.0")
+                            else:
+                                converted_val = float(f)
+                                print(f"  -> Entropy: Converted to float: {converted_val}")
+                        except (ValueError, TypeError) as e:
+                            print(f"  -> Entropy: Error converting {f}: {e}, defaulting to 0.0")
+                            converted_val = 0.0
+                        clean_feats.append(converted_val)
                     for name, val in zip(names, clean_feats):
                         feature_name = f"{col}_{name}"
                         preview_list.append({"feature": feature_name, "value": val})
@@ -510,7 +597,21 @@ async def extraction(file: UploadFile = File(...), config: str = Form(...)):
                 for col in wav_targets:
                     segment = df[col].fillna(df[col].mean()).values
                     feats, names = extract_wav(segment, wavelet, level)
-                    clean_feats = [float(f) if not pd.isna(f) else 0.0 for f in feats]
+                    # More robust value conversion for wavelet features
+                    clean_feats = []
+                    for f in feats:
+                        print(f"Wavelet raw feature value {f} (type: {type(f)})")
+                        try:
+                            if f is None or (isinstance(f, float) and np.isnan(f)):
+                                converted_val = 0.0
+                                print(f"  -> Wavelet: Converted None/NaN to 0.0")
+                            else:
+                                converted_val = float(f)
+                                print(f"  -> Wavelet: Converted to float: {converted_val}")
+                        except (ValueError, TypeError) as e:
+                            print(f"  -> Wavelet: Error converting {f}: {e}, defaulting to 0.0")
+                            converted_val = 0.0
+                        clean_feats.append(converted_val)
                     for name, val in zip(names, clean_feats):
                         feature_name = f"{col}_{name}"
                         preview_list.append({"feature": feature_name, "value": val})
@@ -520,6 +621,83 @@ async def extraction(file: UploadFile = File(...), config: str = Form(...)):
             print(f"DEBUG combined preview_list (first 5 of {len(preview_list)} entries): {preview_list[:5]}")
         else:
             print(f"DEBUG combined preview_list: {preview_list}")
+
+        # DEBUG: log what methods were actually used and preview list content
+        print(f"Methods received: {methods}")
+        print(f"Preview list length: {len(preview_list)}")
+        if preview_list:
+            print(f"Sample preview items: {preview_list[:3]}")
+        
+        # General approach: construct processedData based on what was actually produced
+        if ar_results:
+            # AR methods: use windowed feature records
+            response_processed = processed_ar_records
+            print("Using AR windowed feature records as processedData")
+        elif processed_td_records:
+            # Time-domain methods with multiple trials: use trial records
+            response_processed = processed_td_records
+            print(f"Using time-domain trial records as processedData ({len(processed_td_records)} trials)")
+        elif any(method in ['pca', 'kernelPCA', 'truncatedSVD', 'fastICA', 'tsne', 'isomap'] for method in methods):
+            # Built-in dimensionality reduction methods: use transformed data
+            response_processed = X.to_dict(orient='records')
+            print(f"Using transformed data from built-in methods as processedData")
+            print(f"Transformed DataFrame shape: {X.shape}")
+            print(f"processedData contains {len(response_processed)} feature records")
+            print(f"Feature columns: {list(X.columns)}")
+        elif preview_list and len(preview_list) > 0:
+            # If we have a preview list with feature data, construct feature records
+            # This is the general case for any custom feature extraction method
+            
+            # Check if preview items look like extracted features
+            feature_count = 0
+            for item in preview_list:
+                if (isinstance(item, dict) and 
+                    'feature' in item and 
+                    'value' in item and
+                    isinstance(item['feature'], str) and
+                    item['value'] is not None):
+                    feature_count += 1
+            
+            if feature_count > 0:
+                # DEBUG: Show sample preview items to check values before building feature record
+                print(f"DEBUG: Building feature record from {feature_count} preview items")
+                for i, item in enumerate(preview_list[:5]):  # Show first 5
+                    print(f"  Preview item {i}: {item}")
+                
+                # Build feature record(s) from preview list
+                feature_record = {}
+                for item in preview_list:
+                    if isinstance(item, dict) and 'feature' in item and 'value' in item:
+                        feature_record[item['feature']] = item['value']
+                
+                if feature_record:
+                    response_processed = [feature_record]
+                    print(f"Constructed feature record from {feature_count} extracted features")
+                    print(f"Feature record keys: {list(feature_record.keys())[:10]}...")  # Show first 10 keys
+                    # DEBUG: Show actual values to check if they're being zeroed
+                    sample_values = {k: v for i, (k, v) in enumerate(feature_record.items()) if i < 5}
+                    print(f"Sample feature values: {sample_values}")
+                else:
+                    # Fallback to original data if feature construction failed
+                    response_processed = X.to_dict(orient='records')
+                    print("Fallback: using original data as no valid features could be constructed")
+            else:
+                # Preview list doesn't contain valid extracted features, use original data
+                response_processed = X.to_dict(orient='records')
+                print("Preview list doesn't contain valid extracted features, using original data")
+        else:
+            # Default: use original data (no methods applied or no preview data)
+            response_processed = X.to_dict(orient='records')
+            print("Using original data as processedData (no feature extraction applied or no preview data)")
+
+        print(f"Final response_processed type: {type(response_processed)}")
+        print(f"Final response_processed length: {len(response_processed) if isinstance(response_processed, list) else 'N/A'}")
+        if isinstance(response_processed, list) and len(response_processed) > 0:
+            sample_keys = list(response_processed[0].keys())
+            print(f"Sample response_processed record keys ({len(sample_keys)} total): {sample_keys[:10]}...")
+        
+        
+        
         # Construct the base response payload
         if preview_list:
             # Show all AR feature entries when AR method is used, otherwise show first five items
