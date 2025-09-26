@@ -1,9 +1,25 @@
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any
+import sys
 import json
 import pandas as pd
+import os
+# Prepare custom methods package for runtime imports
+CUSTOM_METHODS_PATH = os.path.join(os.path.dirname(__file__), "custom_methods")
+# Ensure it has __init__.py
+init_file = os.path.join(CUSTOM_METHODS_PATH, "__init__.py")
+if not os.path.exists(init_file):
+    open(init_file, "w").close()
+# Add base_dir and custom_methods path to path so package and bare imports work
+base_dir = os.path.dirname(__file__)
+if base_dir not in sys.path:
+    sys.path.insert(0, base_dir)
+# Add custom_methods directory for bare imports
+if CUSTOM_METHODS_PATH not in sys.path:
+    sys.path.insert(0, CUSTOM_METHODS_PATH)
+
 import numpy as np
 import matplotlib
 matplotlib.use('Agg')  # Use non-interactive backend for server-side plotting
@@ -21,6 +37,7 @@ from sklearn.decomposition import KernelPCA, TruncatedSVD, FastICA
 import traceback
 import os
 import importlib.util
+import importlib
 
 app = FastAPI()
 
@@ -110,6 +127,8 @@ async def extraction(file: UploadFile = File(...), config: str = Form(...)):
         # Parse the config JSON
         config = json.loads(config)
         methods = config.get("methods", [])
+        # Filter out invalid method entries to avoid NoneType errors
+        methods = [m for m in methods if isinstance(m, str)]
         features = config.get("features", [])
         settings = config.get("settings", {})
 
@@ -285,13 +304,15 @@ async def extraction(file: UploadFile = File(...), config: str = Form(...)):
         processed_td_records = []  # Initialize for time-domain multi-trial records
 
         # If AR features requested, run custom AR extractor and return feature/value pairs
-        if any('ar_features' in m.lower() for m in methods):
+        if any(isinstance(m, str) and 'ar_features' in m.lower() for m in methods):
             # Dynamically load ar_features module
             spec = importlib.util.spec_from_file_location(
-                "ar_features",
+                "custom_methods.ar_features",
                 os.path.join(os.path.dirname(__file__), "custom_methods", "ar_features.py")
             )
             ar_mod = importlib.util.module_from_spec(spec)
+            sys.modules["custom_methods.ar_features"] = ar_mod
+            ar_mod.__package__ = "custom_methods"
             spec.loader.exec_module(ar_mod)
             extract_ar_features = ar_mod.extract_ar_features
 
@@ -349,7 +370,7 @@ async def extraction(file: UploadFile = File(...), config: str = Form(...)):
 
         # Handle Dominant Frequency extraction if requested
         # Handle Dominant Frequency extraction if requested
-        if any('dominant' in m.lower() for m in methods):
+        if any(isinstance(m, str) and 'dominant' in m.lower() for m in methods):
             print("--- Dominant Frequency branch entered ---")
              # Determine which channels to process for Dominant Frequency
             dom_targets = config.get('channels', []) or numeric_features
@@ -360,10 +381,12 @@ async def extraction(file: UploadFile = File(...), config: str = Form(...)):
             print(f"Dominant frequency targets: {dom_targets}")
             # Dynamically load dominant_frequency custom method
             spec_dom = importlib.util.spec_from_file_location(
-                "dominant_frequency",
+                "custom_methods.dominant_frequency",
                 os.path.join(os.path.dirname(__file__), "custom_methods", "dominant_frequency.py")
             )
             df_mod = importlib.util.module_from_spec(spec_dom)
+            sys.modules["custom_methods.dominant_frequency"] = df_mod
+            df_mod.__package__ = "custom_methods"
             spec_dom.loader.exec_module(df_mod)
             process_dom = getattr(df_mod, 'process_data', None)
             if not process_dom:
@@ -395,13 +418,15 @@ async def extraction(file: UploadFile = File(...), config: str = Form(...)):
             preview_list.extend(preview_dom)
 
         # If AR features requested, run custom AR extractor and return feature/value pairs
-        if any('ar_features' in m.lower() for m in methods):
+        if any(isinstance(m, str) and 'ar_features' in m.lower() for m in methods):
             # Dynamically load ar_features module
             spec = importlib.util.spec_from_file_location(
-                "ar_features",
+                "custom_methods.ar_features",
                 os.path.join(os.path.dirname(__file__), "custom_methods", "ar_features.py")
             )
             ar_mod = importlib.util.module_from_spec(spec)
+            sys.modules["custom_methods.ar_features"] = ar_mod
+            ar_mod.__package__ = "custom_methods"
             spec.loader.exec_module(ar_mod)
             extract_ar_features = ar_mod.extract_ar_features
 
@@ -429,7 +454,7 @@ async def extraction(file: UploadFile = File(...), config: str = Form(...)):
             # continue to final aggregation
 
         # Preview frequency-domain features if requested
-        if any('frequency_domain' in m.lower() for m in methods):
+        if any(isinstance(m, str) and 'frequency_domain' in m.lower() for m in methods):
             spec_freq = importlib.util.spec_from_file_location(
                 "frequency_domain_features",
                 os.path.join(os.path.dirname(__file__), "custom_methods", "frequency_domain_features.py")
@@ -451,12 +476,14 @@ async def extraction(file: UploadFile = File(...), config: str = Form(...)):
                         preview_list.append({"feature": feature_name, "value": val})
 
         # Preview time-domain features if requested
-        if any('time_domain' in m.lower() for m in methods):
+        if any(isinstance(m, str) and 'time_domain' in m.lower() for m in methods):
             spec_td = importlib.util.spec_from_file_location(
-                "time_domain_features",
+                "custom_methods.time_domain_features",
                 os.path.join(os.path.dirname(__file__), "custom_methods", "time_domain_features.py")
             )
             td_mod = importlib.util.module_from_spec(spec_td)
+            sys.modules["custom_methods.time_domain_features"] = td_mod
+            td_mod.__package__ = "custom_methods"
             spec_td.loader.exec_module(td_mod)
             process_td = getattr(td_mod, 'process_data', None)
             if process_td:
@@ -545,12 +572,14 @@ async def extraction(file: UploadFile = File(...), config: str = Form(...)):
                         preview_list.append({"feature": f"{col}_{name}", "value": val})
 
         # Preview entropy features if requested
-        if any('entropy_features' in m.lower() for m in methods):
+        if any(isinstance(m, str) and 'entropy_features' in m.lower() for m in methods):
             spec_ent = importlib.util.spec_from_file_location(
-                "entropy_features",
+                "custom_methods.entropy_features",
                 os.path.join(os.path.dirname(__file__), "custom_methods", "entropy_features.py")
             )
             ent_mod = importlib.util.module_from_spec(spec_ent)
+            sys.modules["custom_methods.entropy_features"] = ent_mod
+            ent_mod.__package__ = "custom_methods"
             spec_ent.loader.exec_module(ent_mod)
             extract_ent = getattr(ent_mod, 'extract_entropy_features', None)
             if extract_ent:
@@ -581,12 +610,14 @@ async def extraction(file: UploadFile = File(...), config: str = Form(...)):
                     ent_results[col] = (names, clean_feats)
 
         # Preview wavelet features if requested
-        if any('wavelet' in m.lower() for m in methods):
+        if any(isinstance(m, str) and 'wavelet' in m.lower() for m in methods):
             spec_wav = importlib.util.spec_from_file_location(
-                "wavelet_features",
+                "custom_methods.wavelet_features",
                 os.path.join(os.path.dirname(__file__), "custom_methods", "wavelet_features.py")
             )
             wav_mod = importlib.util.module_from_spec(spec_wav)
+            sys.modules["custom_methods.wavelet_features"] = wav_mod
+            wav_mod.__package__ = "custom_methods"
             spec_wav.loader.exec_module(wav_mod)
             extract_wav = getattr(wav_mod, 'extract_wavelet_features', None)
             if extract_wav:
@@ -616,11 +647,69 @@ async def extraction(file: UploadFile = File(...), config: str = Form(...)):
                         feature_name = f"{col}_{name}"
                         preview_list.append({"feature": feature_name, "value": val})
 
+        # Removed dedicated breath_rate preview block in favor of generic handler
+
+        # Generic handling for any other custom methods
+        custom_dir = os.path.join(os.path.dirname(__file__), "custom_methods")
+        for method in methods:
+            # skip invalid or null method entries
+            if not isinstance(method, str):
+                continue
+            # Normalize method name by stripping .py extension if present
+            base = method[:-3] if method.lower().endswith('.py') else method
+            # Map legacy alias to new breath_rate module
+            if base.lower() == 'rsp_rate':
+                base = 'breath_rate'
+            # Skip built-in and core custom categories
+            skip = {"pca","kernelpca","truncatedsvd","fastica","tsne","isomap",
+                    "dominant_frequency","ar_features","frequency_domain_features",
+                    "time_domain_features","entropy_features","wavelet_features"}
+            if base.lower() in skip:
+                continue
+            # Dynamically load the custom helper module with correct package context
+            try:
+                spec = importlib.util.spec_from_file_location(
+                    f"custom_methods.{base}",
+                    os.path.join(custom_dir, f"{base}.py"),
+                    submodule_search_locations=[custom_dir]
+                )
+                custom_mod = importlib.util.module_from_spec(spec)
+                sys.modules[f"custom_methods.{base}"] = custom_mod
+                custom_mod.__package__ = "custom_methods"
+                spec.loader.exec_module(custom_mod)
+                func = getattr(custom_mod, 'process_data', None)
+            except Exception as e:
+                print(f"Custom import failed for {base}: {e}")
+                continue
+            # Run custom process_data and append preview entries if available
+            if func:
+                df_input = df[numeric_features].copy()
+                df_out = func(df_input, settings)
+                for rec in df_out.to_dict(orient='records'):
+                    for feat, val in rec.items():
+                        # preserve list/array outputs for custom methods
+                        if isinstance(val, (list, np.ndarray)):
+                            safe_val = val
+                        else:
+                            try:
+                                safe_val = float(val) if val is not None and not (isinstance(val, float) and np.isnan(val)) else 0.0
+                            except Exception:
+                                safe_val = 0.0
+                        preview_list.append({"feature": feat, "value": safe_val})
+
+        # Move any list-valued preview entries (e.g. respiratory_rates) to the front so they show up immediately
+        list_entries = [item for item in preview_list if isinstance(item.get('value'), (list, np.ndarray))]
+        scalar_entries = [item for item in preview_list if not isinstance(item.get('value'), (list, np.ndarray))]
+        preview_list = list_entries + scalar_entries
+
         # DEBUG: log combined preview_list (first 5 entries only)
-        if len(preview_list) > 5:
-            print(f"DEBUG combined preview_list (first 5 of {len(preview_list)} entries): {preview_list[:5]}")
-        else:
-            print(f"DEBUG combined preview_list: {preview_list}")
+        # DEBUG: always dump full previewList including any list-valued entries
+        print(f"DEBUG full preview_list ({len(preview_list)} entries): {preview_list}")
+        # DEBUG: explicitly dump full lists (e.g. respiratory_rates) for easier inspection
+        for item in preview_list:
+            val = item.get('value')
+            if isinstance(val, list):
+                print(f"DEBUG full list for {item.get('feature')}: {val}")
 
         # DEBUG: log what methods were actually used and preview list content
         print(f"Methods received: {methods}")
@@ -694,14 +783,14 @@ async def extraction(file: UploadFile = File(...), config: str = Form(...)):
         print(f"Final response_processed length: {len(response_processed) if isinstance(response_processed, list) else 'N/A'}")
         if isinstance(response_processed, list) and len(response_processed) > 0:
             sample_keys = list(response_processed[0].keys())
-            print(f"Sample response_processed record keys ({len(sample_keys)} total): {sample_keys[:10]}...")
+            print(f"Sample response_processed record keys ({len(sample_keys)} total): {sample_keys[:10]}")
         
         
         
         # Construct the base response payload
         if preview_list:
-            # Show all AR feature entries when AR method is used, otherwise show first five items
-            use_full_preview = any('ar_features' in m.lower() for m in methods)
+            # Show full preview whenever any preview entry is a list or array (e.g. full respiratory_rates), else truncate
+            use_full_preview = any(isinstance(item.get('value'), (list, np.ndarray)) for item in preview_list)
             response = {
                 "message": "Feature extraction completed successfully",
                 "preview": preview_list if use_full_preview else preview_list[:5],

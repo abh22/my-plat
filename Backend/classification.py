@@ -170,3 +170,34 @@ async def classify_features(
         }
     except Exception as e:
         return {"error": str(e)}
+
+@app.post("/classification/preview")
+async def preview_dbscan(
+    eps: float = Form(...),
+    min_pts: int = Form(...),
+    features: UploadFile = File(...)
+):
+    """Run a lightweight DBSCAN to return approximate cluster count for given eps/min_pts."""
+    try:
+        content = await features.read()
+        payload = json.loads(content.decode('utf-8'))
+        # extract feature list
+        feature_data = payload.get('features', payload)
+        df = pd.DataFrame(feature_data)
+        # numeric only
+        import numpy as np
+        numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
+        if not numeric_cols:
+            return {'numClusters': 0}
+        X = df[numeric_cols]
+        # Scale features for consistent distance metric
+        from sklearn.preprocessing import StandardScaler
+        scaler = StandardScaler()
+        X = scaler.fit_transform(X)
+        model = DBSCAN(eps=eps, min_samples=min_pts)
+        labels = model.fit_predict(X)
+        # count clusters excluding noise (-1)
+        unique = set(labels.tolist()) - {-1}
+        return {'numClusters': len(unique)}
+    except Exception as e:
+        return {'numClusters': None, 'error': str(e)}

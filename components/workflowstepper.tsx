@@ -10,7 +10,7 @@ import DataPreprocessing from "./steps/dataPreprocessing"
 import FeatureExtraction from "./steps/featureExtraction"
 import FeatureEvaluation from "./steps/featureEvaluation"
 import Classification from "./steps/classification"
-import Testing from "./steps/testing"
+
 
 // Define the step components with proper typing
 const steps = [
@@ -20,7 +20,7 @@ const steps = [
   { id: 3, name: "Feature Extraction", component: FeatureExtraction },
   { id: 4, name: "Feature Evaluation", component: FeatureEvaluation },
   { id: 5, name: "Classification", component: Classification },
-  { id: 6, name: "Testing", component: Testing },
+ 
 
 ]
 
@@ -166,7 +166,7 @@ export default function WorkflowStepper() {
         {currentStep === 3 && <FeatureExtraction data={workflowData} onComplete={handleNext} />}
         {currentStep === 4 && <FeatureEvaluation data={workflowData} onComplete={handleNext} />}
         {currentStep === 5 && <Classification data={workflowData} onComplete={handleNext} />}
-        {currentStep === 6 && <Testing data={workflowData} onComplete={handleNext} />}
+       
       </div>
 
       {/* Navigation buttons */}
@@ -178,9 +178,11 @@ export default function WorkflowStepper() {
         >
           Previous
         </Button>
-        <Button variant="outline" onClick={handleSkip} disabled={currentStep === steps.length - 1}>
-          Skip this step
-        </Button>
+        {currentStep > 0 && currentStep < steps.length - 1 && (
+          <Button variant="outline" onClick={handleSkip}>
+            Skip this step
+          </Button>
+        )}
         {currentStep === steps.length - 1 ? (
           <Button onClick={() => console.log("Workflow completed:", workflowData)}>Finish</Button>
         ) : null}

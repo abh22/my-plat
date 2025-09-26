@@ -1,0 +1,16 @@
+{
+  "name": "Breath rate",
+  "filename": "breath_rate.py",
+  "main_file": "breath_rate.py",
+  "files": [
+    "signal_filter.py",
+    "signal_formatpeaks.py",
+    "signal_interpolate.py",
+    "signal_rate.py",
+    "signal_resample.py",
+    "breath_rate.py"
+  ],
+  "description": "Process a dataframe to calculate respiration rate.",
+  "category": "extraction",
+  "created": "2025-07-07 12:16:26.260245"
+}

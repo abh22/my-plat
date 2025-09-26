@@ -53,7 +53,9 @@ export default function FeatureExtraction({ data, onComplete }: { data: any; onC
   const [windowStep, setWindowStep] = useState("128");  // Window step size (samples) for AR extraction
   const [trialLength, setTrialLength] = useState("10000");  // Trial length (samples) for time-domain feature segmentation
   // New state for custom methods
-  const [customMethods, setCustomMethods] = useState<Array<{ name: string; filename: string; description: string; category: string }>>([]);
+  const [customMethods, setCustomMethods] = useState<Array<{
+    main_file: string; name: string; filename: string; description: string; category: string 
+}>>([]);
   // New state for AR feature plots
   const [arPlots, setArPlots] = useState<Record<string,string>>({});
   // Add state hooks for other custom method plots
@@ -759,16 +761,16 @@ const handleSubmit = () => {
                     <div key={method.filename} className="border rounded-md p-3 hover:bg-amber-50 transition-colors duration-150">
                       <Label className="flex items-center space-x-2 mb-2">
                         <Checkbox
-                          checked={selectedMethods.includes(method.filename)}
-                          onCheckedChange={() => handleMethodToggle(method.filename)}
-                          className="text-amber-600"
-                        />
+  checked={selectedMethods.includes(method.filename || method.main_file)}
+  onCheckedChange={() => handleMethodToggle(method.filename || method.main_file)}
+/>
+
                         <span className="font-medium text-gray-800">{method.name}</span>
                       </Label>
                       {method.description && (
                         <p className="text-xs text-gray-500 pl-6">{method.description}</p>
                       )}
-                      {method.filename.toLowerCase().includes('ar_features') && selectedMethods.includes(method.filename) && (
+                      {(method.filename ?? '').toLowerCase().includes('ar_features') && selectedMethods.includes(method.filename) && (
                         <div className="mt-2 space-y-2 pl-6">
                           <div className="flex items-baseline space-x-2">
                             <Label htmlFor="windowSize" className="text-xs font-medium text-gray-700">Window Size:</Label>
@@ -780,7 +782,7 @@ const handleSubmit = () => {
                           </div>
                         </div>
                       )}
-                      {method.filename.toLowerCase().includes('time_domain') && selectedMethods.includes(method.filename) && (
+                      {(method.filename ?? '').toLowerCase().includes('time_domain') && selectedMethods.includes(method.filename) && (
                         <div className="mt-2 space-y-2 pl-6">
                           <div className="flex items-baseline space-x-2">
                             <Label htmlFor="trialLength" className="text-xs font-medium text-gray-700">Trial Length:</Label>
@@ -806,7 +808,7 @@ const handleSubmit = () => {
         </Card>
       </div>  {/* end of grid-cols-2 cards */}
       {/* Unified Sampling Rate Input for Frequency Methods */}
-      {selectedMethods.some(m => m.toLowerCase().includes("dominant") || m.toLowerCase().includes("frequency")) && (
+      {selectedMethods.some(m => typeof m === 'string' && ((m.toLowerCase().includes("dominant") || m.toLowerCase().includes("frequency")))) && (
         <div className="mt-4 flex items-center space-x-2">
           <Label htmlFor="samplingRate" className="text-sm font-medium text-gray-700">Sampling Rate (Hz):</Label>
           <Input
